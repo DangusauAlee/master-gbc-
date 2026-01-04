@@ -1,0 +1,22 @@
+# Node modules
+node_modules/
+
+# Environment files
+.env
+
+# Logs
+*.log
+
+# Build outputs
+dist/
+build/
+.vite/
+.cache/
+*.tsbuildinfo
+
+# Capacitor / platform files
+android/
+ios/
+
+# IDE files
+.vscode/
