@@ -1,143 +1,407 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Header from '../components/Header';
+import { 
+  Search, 
+  X, 
+  MessageSquarePlus, 
+  Edit, 
+  Loader2, 
+  CheckCircle,
+  Clock,
+  User,
+  Users,
+  Filter,
+  ChevronRight,
+  Shield,
+  Phone,
+  Mail,
+  MapPin
+} from 'lucide-react';
 import { Conversation, Member } from '../types';
 import { getConversations, getMembers } from '../services/mockApi';
-import { Edit, Search, X, MessageSquarePlus } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 
 const Messages = () => {
     const navigate = useNavigate();
     const [conversations, setConversations] = useState<Conversation[]>([]);
+    const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
     const [isNewChatOpen, setIsNewChatOpen] = useState(false);
     const [friends, setFriends] = useState<Member[]>([]);
     const [friendSearch, setFriendSearch] = useState("");
+    const [searchTerm, setSearchTerm] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [activeFilter, setActiveFilter] = useState<'all' | 'unread'>('all');
+    const [selectedFriend, setSelectedFriend] = useState<Member | null>(null);
 
     useEffect(() => {
-        getConversations().then(setConversations);
-        getMembers().then(members => {
-            // Filter only verified friends for the new chat list
-            setFriends(members.filter(m => m.is_friend));
-        });
+        const fetchData = async () => {
+            try {
+                setLoading(true);
+                const [convsData, membersData] = await Promise.all([
+                    getConversations(),
+                    getMembers()
+                ]);
+                setConversations(convsData);
+                setFilteredConversations(convsData);
+                setFriends(membersData.filter(m => m.is_friend));
+            } catch (error) {
+                console.error('Error fetching data:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchData();
     }, []);
+
+    useEffect(() => {
+        let result = conversations;
+
+        // Filter by search term
+        if (searchTerm) {
+            const term = searchTerm.toLowerCase();
+            result = result.filter(conv => 
+                conv.with_user.name.toLowerCase().includes(term) ||
+                conv.last_message.toLowerCase().includes(term)
+            );
+        }
+
+        // Filter by unread
+        if (activeFilter === 'unread') {
+            result = result.filter(conv => conv.unread_count > 0);
+        }
+
+        setFilteredConversations(result);
+    }, [searchTerm, activeFilter, conversations]);
 
     const openChat = (userId: number) => {
         navigate(`/messages/chat/${userId}`);
+        setIsNewChatOpen(false);
     };
 
     const filteredFriends = friends.filter(f => 
         f.full_name.toLowerCase().includes(friendSearch.toLowerCase()) || 
-        f.company.toLowerCase().includes(friendSearch.toLowerCase())
+        f.company?.toLowerCase().includes(friendSearch.toLowerCase()) ||
+        f.position?.toLowerCase().includes(friendSearch.toLowerCase())
     );
 
+    const unreadCount = conversations.filter(c => c.unread_count > 0).length;
+    const totalUnread = conversations.reduce((total, conv) => total + conv.unread_count, 0);
+
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-gradient-to-b from-gray-50 to-blue-50 flex flex-col items-center justify-center safe-area">
+                <div className="text-center">
+                    <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-gray-600 font-medium">Loading Messages...</p>
+                </div>
+            </div>
+        );
+    }
+
     return (
-        <div className="pb-24 bg-white min-h-screen relative">
-            <Header title="Messages" />
-            
-            <div className="px-4 py-2">
-                <input 
-                    type="text" 
-                    placeholder="Search messages..." 
-                    className="w-full bg-white border border-primary-900/10 rounded-2xl py-3 px-4 text-sm text-gray-700 focus:ring-2 focus:ring-primary-100 outline-none"
-                />
-            </div>
-
-            <div className="mt-2">
-                {conversations.map(conv => (
-                    <div 
-                        key={conv.id} 
-                        onClick={() => openChat(conv.with_user.id)}
-                        className="flex items-center gap-3 p-4 hover:bg-gray-50 active:bg-gray-100 transition-colors border-b border-primary-900/10 cursor-pointer"
-                    >
-                        <div className="relative">
-                            <img 
-                                src={conv.with_user.avatar_url} 
-                                alt={conv.with_user.name} 
-                                className="w-12 h-12 rounded-full object-cover border border-primary-900/10"
-                            />
-                            <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white ring-1 ring-primary-900/10"></div>
-                        </div>
-                        
-                        <div className="flex-1 min-w-0">
-                            <div className="flex justify-between items-baseline mb-0.5">
-                                <h3 className="font-bold text-sm text-gray-900 truncate">{conv.with_user.name}</h3>
-                                <span className="text-[10px] text-gray-400">{conv.last_message_at}</span>
-                            </div>
-                            <p className={`text-xs truncate ${conv.unread_count > 0 ? 'text-gray-900 font-medium' : 'text-gray-500'}`}>
-                                {conv.last_message}
-                            </p>
-                        </div>
-                        
-                        {conv.unread_count > 0 && (
-                            <div className="w-5 h-5 bg-primary-600 rounded-full flex items-center justify-center border border-primary-900/10">
-                                <span className="text-[10px] font-bold text-white">{conv.unread_count}</span>
-                            </div>
-                        )}
+        <div className="min-h-screen bg-gradient-to-b from-gray-50 to-blue-50">
+            {/* Fixed Header */}
+            <div className="fixed top-0 left-0 right-0 z-40 bg-gradient-to-b from-gray-50 to-blue-50">
+                <div className="px-4 pt-4 pb-3 flex items-center justify-between border-b border-gray-200/80">
+                    <div>
+                        <h1 className="text-lg font-bold text-gray-800">Messages</h1>
+                        <p className="text-xs text-gray-500">
+                            {unreadCount > 0 ? `${unreadCount} unread conversations` : 'All caught up!'}
+                        </p>
                     </div>
-                ))}
+                    <button 
+                        onClick={() => setIsNewChatOpen(true)}
+                        className="p-2 bg-gradient-to-r from-blue-600 to-blue-700 rounded-xl text-white shadow-lg shadow-blue-200/50 active:scale-95 transition-all"
+                    >
+                        <MessageSquarePlus size={20} />
+                    </button>
+                </div>
             </div>
 
-            {/* Floating Action Button */}
-            <button 
-                onClick={() => setIsNewChatOpen(true)}
-                className="fixed bottom-24 right-4 w-14 h-14 bg-primary-600 rounded-full shadow-lg shadow-primary-200 flex items-center justify-center text-white active:scale-95 transition-all z-20"
-            >
-                <MessageSquarePlus size={24} />
-            </button>
+            {/* Main Content */}
+            <main className="px-4 pt-16 pb-24 max-w-screen-sm mx-auto">
+                {/* Search & Filter Section */}
+                <div className="mb-6">
+                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-4 mb-4">
+                        <div className="relative mb-3 group">
+                            <div className="absolute left-0 top-0 bottom-0 w-12 flex items-center justify-center">
+                                <Search className="text-gray-400 group-focus-within:text-blue-600 transition-colors" size={20} />
+                            </div>
+                            <input
+                                type="text"
+                                className="w-full pl-12 pr-12 py-3.5 bg-gray-50/50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all"
+                                placeholder="Search messages, people..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                            {searchTerm && (
+                                <button
+                                    onClick={() => setSearchTerm('')}
+                                    className="absolute right-0 top-0 bottom-0 w-12 flex items-center justify-center text-gray-400 hover:text-gray-600"
+                                >
+                                    <X size={18} />
+                                </button>
+                            )}
+                        </div>
 
-            {/* New Chat Modal/Sheet */}
-            {isNewChatOpen && (
-                <>
-                    <div 
-                        className="fixed inset-0 bg-black/30 z-40 backdrop-blur-sm transition-opacity"
-                        onClick={() => setIsNewChatOpen(false)}
-                    ></div>
-                    <div className="fixed bottom-0 left-0 right-0 bg-white z-50 rounded-t-[2rem] shadow-xl border-t border-primary-900/10 h-[85vh] flex flex-col animate-in slide-in-from-bottom duration-300">
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-primary-900/10">
-                            <h3 className="font-bold text-gray-800 text-lg">New Chat</h3>
-                            <button 
-                                onClick={() => setIsNewChatOpen(false)}
-                                className="p-2 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 transition-colors"
+                        {/* Filter Tabs */}
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setActiveFilter('all')}
+                                className={`flex-1 py-2 px-4 rounded-lg text-xs font-medium transition-all ${
+                                    activeFilter === 'all'
+                                        ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-sm'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                }`}
                             >
-                                <X size={20} />
+                                All
+                            </button>
+                            <button
+                                onClick={() => setActiveFilter('unread')}
+                                className={`flex-1 py-2 px-4 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1 ${
+                                    activeFilter === 'unread'
+                                        ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-sm'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                }`}
+                            >
+                                Unread
+                                {totalUnread > 0 && (
+                                    <span className="bg-white/20 px-1.5 py-0.5 rounded-full text-[10px]">
+                                        {totalUnread}
+                                    </span>
+                                )}
                             </button>
                         </div>
-                        
-                        <div className="px-4 py-3">
-                             <div className="relative">
-                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                    <Search size={18} className="text-gray-400" />
-                                </div>
-                                <input
-                                    type="text"
-                                    className="block w-full pl-10 pr-3 py-3 border border-primary-900/10 rounded-2xl leading-5 bg-gray-50 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-primary-200 focus:border-primary-400 sm:text-sm transition-all"
-                                    placeholder="Search friends..."
-                                    value={friendSearch}
-                                    onChange={(e) => setFriendSearch(e.target.value)}
-                                    autoFocus
-                                />
+                    </div>
+                </div>
+
+                {/* Stats Banner */}
+                <div className="mb-6">
+                    <div className="bg-gradient-to-r from-blue-600/10 to-blue-500/10 backdrop-blur-sm rounded-2xl border border-blue-200/50 p-4">
+                        <div className="grid grid-cols-3 gap-4">
+                            <div className="bg-white/80 rounded-xl p-3 text-center">
+                                <div className="text-2xl font-bold text-gray-900">{conversations.length}</div>
+                                <div className="text-xs text-gray-600">Conversations</div>
+                            </div>
+                            <div className="bg-white/80 rounded-xl p-3 text-center">
+                                <div className="text-2xl font-bold text-gray-900">{unreadCount}</div>
+                                <div className="text-xs text-gray-600">Unread</div>
+                            </div>
+                            <div className="bg-white/80 rounded-xl p-3 text-center">
+                                <div className="text-2xl font-bold text-gray-900">{friends.length}</div>
+                                <div className="text-xs text-gray-600">Friends</div>
                             </div>
                         </div>
+                    </div>
+                </div>
 
-                        <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Connected Members</p>
-                            {filteredFriends.map(friend => (
+                {/* Conversations List */}
+                <div>
+                    {filteredConversations.length === 0 ? (
+                        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-8 text-center">
+                            <div className="w-16 h-16 bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                <MessageSquarePlus className="w-8 h-8 text-blue-600" />
+                            </div>
+                            <h4 className="text-lg font-bold text-gray-900 mb-2">
+                                {activeFilter === 'unread' ? 'No Unread Messages' : 'No Messages Yet'}
+                            </h4>
+                            <p className="text-gray-600 text-sm mb-6">
+                                {activeFilter === 'unread' 
+                                    ? 'You\'re all caught up!' 
+                                    : 'Start a conversation with your network'}
+                            </p>
+                            <button
+                                onClick={() => setIsNewChatOpen(true)}
+                                className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-sm font-bold px-6 py-3 rounded-lg transition-colors active:scale-95"
+                            >
+                                Start New Chat
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {filteredConversations.map(conv => (
                                 <div 
-                                    key={friend.id}
-                                    onClick={() => openChat(friend.user_id)}
-                                    className="flex items-center gap-3 p-3 rounded-2xl hover:bg-gray-50 cursor-pointer active:scale-[0.98] transition-all"
+                                    key={conv.id} 
+                                    onClick={() => openChat(conv.with_user.id)}
+                                    className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 overflow-hidden hover:shadow-xl transition-shadow cursor-pointer active:scale-[0.99]"
                                 >
-                                    <img src={friend.image_url} alt={friend.full_name} className="w-12 h-12 rounded-full border border-primary-900/10" />
-                                    <div>
-                                        <h4 className="font-bold text-sm text-gray-900">{friend.full_name}</h4>
-                                        <p className="text-xs text-gray-500">{friend.company}</p>
+                                    <div className="p-4">
+                                        <div className="flex items-start justify-between">
+                                            <div className="flex items-center gap-3 flex-1 min-w-0">
+                                                <div className="relative">
+                                                    <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center text-white font-bold overflow-hidden">
+                                                        {conv.with_user.avatar_url ? (
+                                                            <img 
+                                                                src={conv.with_user.avatar_url} 
+                                                                alt={conv.with_user.name}
+                                                                className="w-full h-full object-cover"
+                                                            />
+                                                        ) : (
+                                                            conv.with_user.name.substring(0, 2).toUpperCase()
+                                                        )}
+                                                    </div>
+                                                    <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-white ${
+                                                        conv.with_user.status === 'online' ? 'bg-green-500' : 
+                                                        conv.with_user.status === 'away' ? 'bg-yellow-500' : 
+                                                        'bg-gray-400'
+                                                    }`}></div>
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <h3 className="text-sm font-bold text-gray-900 truncate">
+                                                            {conv.with_user.name}
+                                                        </h3>
+                                                        <span className="text-xs text-gray-400 whitespace-nowrap ml-2">
+                                                            {conv.last_message_at}
+                                                        </span>
+                                                    </div>
+                                                    <p className={`text-sm truncate ${
+                                                        conv.unread_count > 0 ? 'text-gray-900 font-medium' : 'text-gray-600'
+                                                    }`}>
+                                                        {conv.last_message}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            
+                                            {conv.unread_count > 0 && (
+                                                <div className="flex-shrink-0 ml-2">
+                                                    <div className="w-6 h-6 bg-gradient-to-r from-blue-600 to-blue-700 rounded-full flex items-center justify-center">
+                                                        <span className="text-xs font-bold text-white">{conv.unread_count}</span>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                             ))}
-                            {filteredFriends.length === 0 && (
-                                <div className="text-center py-10 text-gray-400 text-sm">
-                                    No connections found.
+                        </div>
+                    )}
+                </div>
+            </main>
+
+            {/* New Chat Modal */}
+            {isNewChatOpen && (
+                <>
+                    <div 
+                        className="fixed inset-0 bg-black/50 z-40 backdrop-blur-sm transition-opacity"
+                        onClick={() => setIsNewChatOpen(false)}
+                    ></div>
+                    <div className="fixed inset-0 z-50 flex items-end justify-center">
+                        <div className="bg-gradient-to-b from-gray-50 to-blue-50 w-full max-w-screen-sm mx-auto h-[85vh] rounded-t-2xl shadow-2xl border border-gray-200/80 flex flex-col">
+                            {/* Modal Header */}
+                            <div className="p-4 border-b border-gray-200/80 bg-gradient-to-b from-gray-50 to-blue-50 rounded-t-2xl">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div>
+                                        <h2 className="text-lg font-bold text-gray-800">New Message</h2>
+                                        <p className="text-xs text-gray-500">Connect with your network</p>
+                                    </div>
+                                    <button 
+                                        onClick={() => setIsNewChatOpen(false)}
+                                        className="p-2 bg-white border border-gray-200 rounded-xl text-gray-600 hover:bg-gray-50 active:scale-95 transition-all shadow-sm"
+                                    >
+                                        <X size={20} />
+                                    </button>
                                 </div>
-                            )}
+
+                                {/* Search Bar */}
+                                <div className="relative group">
+                                    <div className="absolute left-0 top-0 bottom-0 w-12 flex items-center justify-center">
+                                        <Search className="text-gray-400 group-focus-within:text-blue-600 transition-colors" size={20} />
+                                    </div>
+                                    <input
+                                        type="text"
+                                        className="w-full pl-12 pr-12 py-3.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                        placeholder="Search friends, companies..."
+                                        value={friendSearch}
+                                        onChange={(e) => setFriendSearch(e.target.value)}
+                                        autoFocus
+                                    />
+                                    {friendSearch && (
+                                        <button
+                                            onClick={() => setFriendSearch("")}
+                                            className="absolute right-0 top-0 bottom-0 w-12 flex items-center justify-center text-gray-400 hover:text-gray-600"
+                                        >
+                                            <X size={18} />
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Friends List */}
+                            <div className="flex-1 overflow-y-auto p-4">
+                                <div className="mb-4">
+                                    <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
+                                        <Users size={16} />
+                                        Connected Members ({friends.length})
+                                    </h3>
+                                    {filteredFriends.length === 0 ? (
+                                        <div className="bg-white/95 backdrop-blur-sm rounded-2xl border border-gray-200/80 p-6 text-center">
+                                            <div className="w-12 h-12 bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                                                <Users className="w-6 h-6 text-blue-600" />
+                                            </div>
+                                            <p className="text-sm text-gray-600">
+                                                {friendSearch ? 'No friends found' : 'No connections yet'}
+                                            </p>
+                                            {!friendSearch && (
+                                                <button
+                                                    onClick={() => {
+                                                        setIsNewChatOpen(false);
+                                                        navigate('/members');
+                                                    }}
+                                                    className="mt-4 text-sm text-blue-600 hover:text-blue-700 font-medium"
+                                                >
+                                                    Explore Members →
+                                                </button>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            {filteredFriends.map(friend => (
+                                                <div 
+                                                    key={friend.id}
+                                                    onClick={() => openChat(friend.user_id)}
+                                                    className="bg-white/95 backdrop-blur-sm rounded-2xl border border-gray-200/80 p-3 hover:shadow-md transition-shadow cursor-pointer active:scale-[0.98]"
+                                                >
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="relative">
+                                                            <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center text-white font-bold overflow-hidden">
+                                                                {friend.image_url ? (
+                                                                    <img 
+                                                                        src={friend.image_url} 
+                                                                        alt={friend.full_name}
+                                                                        className="w-full h-full object-cover"
+                                                                    />
+                                                                ) : (
+                                                                    friend.full_name.substring(0, 2).toUpperCase()
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center justify-between">
+                                                                <h4 className="text-sm font-bold text-gray-900 truncate">
+                                                                    {friend.full_name}
+                                                                </h4>
+                                                                <ChevronRight size={16} className="text-gray-400" />
+                                                            </div>
+                                                            {friend.position && (
+                                                                <p className="text-xs text-gray-600 truncate mt-1">
+                                                                    {friend.position}
+                                                                </p>
+                                                            )}
+                                                            {friend.company && (
+                                                                <p className="text-xs text-gray-500 truncate mt-0.5 flex items-center gap-1">
+                                                                    <Users size={10} />
+                                                                    {friend.company}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </>

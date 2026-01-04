@@ -143,3 +143,15 @@ export interface Message {
     media_url?: string;
     duration?: string; // for audio
 }
+
+// Add these types to your existing types file
+type Pioneer = {
+  id: string;
+  name: string;
+  position: string;
+  image_url: string;
+  bio?: string;
+  order_index: number;
+  is_active: boolean;
+  created_at: string;
+};

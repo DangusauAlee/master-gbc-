@@ -1,299 +1,680 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Header from '../components/Header';
-import { Calendar, Newspaper, ShoppingBag, Video, ChevronLeft, MapPin, Clock, Briefcase, Plus, Search, DollarSign, Filter } from 'lucide-react';
+import { 
+  Calendar, 
+  Newspaper, 
+  ShoppingBag, 
+  Video, 
+  ChevronLeft, 
+  MapPin, 
+  Clock, 
+  Briefcase, 
+  Plus, 
+  Search, 
+  DollarSign, 
+  Filter,
+  X,
+  Loader2,
+  CheckCircle,
+  Users,
+  Building,
+  TrendingUp
+} from 'lucide-react';
 import { Event, Classified, Job } from '../types';
 import { getEvents, getClassifieds, getJobs } from '../services/mockApi';
-import { useNavigate } from 'react-router-dom';
 
 const Explore = () => {
-    // View State: 'explore' is the main dashboard, 'jobs' is the sub-page
     const [view, setView] = useState<'explore' | 'jobs'>('explore');
     const navigate = useNavigate();
     
-    // Data States
     const [events, setEvents] = useState<Event[]>([]);
     const [classifieds, setClassifieds] = useState<Classified[]>([]);
     const [jobs, setJobs] = useState<Job[]>([]);
+    const [filteredJobs, setFilteredJobs] = useState<Job[]>([]);
 
-    // Job Board States
     const [jobTab, setJobTab] = useState<'all' | 'my' | 'new'>('all');
     const [jobSearch, setJobSearch] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [selectedType, setSelectedType] = useState("All");
+    const [showFilters, setShowFilters] = useState(false);
 
     useEffect(() => {
-        getEvents().then(setEvents);
-        getClassifieds().then(setClassifieds);
-        getJobs().then(setJobs);
+        const fetchData = async () => {
+            try {
+                setLoading(true);
+                const [eventsData, classifiedsData, jobsData] = await Promise.all([
+                    getEvents(),
+                    getClassifieds(),
+                    getJobs()
+                ]);
+                setEvents(eventsData);
+                setClassifieds(classifiedsData);
+                setJobs(jobsData);
+                setFilteredJobs(jobsData);
+            } catch (error) {
+                console.error('Error fetching data:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchData();
     }, []);
 
+    useEffect(() => {
+        let result = jobs;
+
+        if (jobTab === 'my') {
+            result = result.filter(job => job.is_owner);
+        }
+
+        if (jobSearch) {
+            const term = jobSearch.toLowerCase();
+            result = result.filter(job => 
+                job.title.toLowerCase().includes(term) || 
+                job.company.toLowerCase().includes(term) ||
+                job.location.toLowerCase().includes(term)
+            );
+        }
+
+        if (selectedType !== 'All') {
+            result = result.filter(job => job.type === selectedType);
+        }
+
+        setFilteredJobs(result);
+    }, [jobSearch, jobTab, jobs, selectedType]);
+
+    const jobTypes = ['All', 'Full-time', 'Part-time', 'Contract', 'Remote', 'Internship'];
+
     const QuickAction = ({ icon: Icon, label, color, onClick }: { icon: any, label: string, color: string, onClick?: () => void }) => (
-        <button onClick={onClick} className="flex flex-col items-center gap-2 group">
-            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${color} shadow-sm border border-primary-900/10 group-active:scale-95 transition-transform`}>
-                <Icon size={24} className="text-white" />
+        <button 
+            onClick={onClick} 
+            className="flex flex-col items-center gap-2 group active:scale-95 transition-transform"
+        >
+            <div className={`w-16 h-16 ${color} rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-xl transition-shadow`}>
+                <Icon size={28} className="text-white" />
             </div>
-            <span className="text-[10px] font-semibold text-gray-600">{label}</span>
+            <span className="text-xs font-bold text-gray-700">{label}</span>
         </button>
     );
 
+    const clearFilters = () => {
+        setJobSearch("");
+        setSelectedType("All");
+        setJobTab('all');
+    };
+
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-gradient-to-b from-gray-50 to-blue-50 flex flex-col items-center justify-center safe-area">
+                <div className="text-center">
+                    <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-gray-600 font-medium">Loading Explore...</p>
+                </div>
+            </div>
+        );
+    }
+
     // --- EMPLOYMENT BOARD VIEW ---
     if (view === 'jobs') {
-        const filteredJobs = jobs.filter(job => {
-            if (jobTab === 'my' && !job.is_owner) return false;
-            if (jobSearch) {
-                const term = jobSearch.toLowerCase();
-                return job.title.toLowerCase().includes(term) || job.company.toLowerCase().includes(term);
-            }
-            return true;
-        });
-
         return (
-            <div className="pb-24 bg-gray-50 min-h-screen">
+            <div className="min-h-screen bg-gradient-to-b from-gray-50 to-blue-50">
                 {/* Custom Sub-page Header */}
-                <div className="sticky top-0 z-30 bg-white/90 backdrop-blur-md px-4 py-3 flex items-center gap-3 shadow-sm border-b border-primary-900/10">
-                    <button 
-                        onClick={() => setView('explore')}
-                        className="p-2 bg-white border border-primary-900/10 rounded-full text-gray-600 hover:bg-gray-50 active:scale-95 transition-all"
-                    >
-                        <ChevronLeft size={20} />
-                    </button>
-                    <h1 className="text-lg font-bold text-gray-800">Employment Board</h1>
-                </div>
-
-                {/* Search & Filter Bar */}
-                <div className="sticky top-[60px] z-20 bg-gray-50 px-4 pt-4 pb-2 backdrop-blur-sm">
-                    {jobTab !== 'new' && (
-                        <div className="relative mb-3">
-                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                <Search size={18} className="text-gray-400" />
-                            </div>
-                            <input
-                                type="text"
-                                className="block w-full pl-10 pr-3 py-3 border border-primary-900/10 rounded-2xl leading-5 bg-white placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-primary-200 focus:border-primary-400 sm:text-sm transition-all shadow-sm"
-                                placeholder="Search jobs, companies..."
-                                value={jobSearch}
-                                onChange={(e) => setJobSearch(e.target.value)}
-                            />
+                <div className="sticky top-0 z-40 bg-gradient-to-b from-gray-50 to-blue-50">
+                    <div className="px-4 pt-4 pb-3 flex items-center gap-3 border-b border-gray-200/80">
+                        <button 
+                            onClick={() => setView('explore')}
+                            className="p-2 bg-white border border-gray-200 rounded-xl text-gray-600 hover:bg-gray-50 active:scale-95 transition-all shadow-sm"
+                        >
+                            <ChevronLeft size={20} />
+                        </button>
+                        <div>
+                            <h1 className="text-lg font-bold text-gray-800">Employment Board</h1>
+                            <p className="text-xs text-gray-500">Find & post jobs in your network</p>
                         </div>
-                    )}
-
-                    {/* Navigation Tabs */}
-                    <div className="flex p-1 bg-white rounded-xl border border-primary-900/10 shadow-sm mb-2">
-                        <button
-                            onClick={() => setJobTab('all')}
-                            className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${
-                                jobTab === 'all' 
-                                    ? 'bg-primary-50 text-primary-600 shadow-sm border border-primary-900/10' 
-                                    : 'text-gray-500 hover:text-gray-700 border border-transparent'
-                            }`}
-                        >
-                            Find Jobs
-                        </button>
-                        <button
-                            onClick={() => setJobTab('my')}
-                            className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${
-                                jobTab === 'my' 
-                                    ? 'bg-primary-50 text-primary-600 shadow-sm border border-primary-900/10' 
-                                    : 'text-gray-500 hover:text-gray-700 border border-transparent'
-                            }`}
-                        >
-                            My Listings
-                        </button>
-                        <button
-                            onClick={() => setJobTab('new')}
-                            className={`flex-none px-3 py-2 flex items-center gap-1 text-xs font-semibold rounded-lg transition-all ${
-                                jobTab === 'new' 
-                                    ? 'bg-primary-600 text-white shadow-sm border border-primary-900/10' 
-                                    : 'text-primary-600 bg-primary-50 hover:bg-primary-100 border border-primary-900/10'
-                            }`}
-                        >
-                            <Plus size={14} />
-                            Post Job
-                        </button>
                     </div>
                 </div>
 
-                <div className="px-4 mt-2">
+                {/* Main Content - MATCHING MEMBERS PAGE WIDTH */}
+                <main className="px-4 pt-4 pb-24 max-w-screen-sm mx-auto">
+                    {/* Search & Filter Section */}
+                    <div className="mb-6">
+                        {/* Search Bar - Hidden in New Tab */}
+                        {jobTab !== 'new' && (
+                            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-4 mb-4">
+                                <div className="relative mb-3 group">
+                                    <div className="absolute left-0 top-0 bottom-0 w-12 flex items-center justify-center">
+                                        <Search className="text-gray-400 group-focus-within:text-blue-600 transition-colors" size={20} />
+                                    </div>
+                                    <input
+                                        type="text"
+                                        className="w-full pl-12 pr-12 py-3.5 bg-gray-50/50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:bg-white transition-all"
+                                        placeholder="Search jobs, companies, locations..."
+                                        value={jobSearch}
+                                        onChange={(e) => setJobSearch(e.target.value)}
+                                    />
+                                    {jobSearch && (
+                                        <button
+                                            onClick={() => setJobSearch('')}
+                                            className="absolute right-0 top-0 bottom-0 w-12 flex items-center justify-center text-gray-400 hover:text-gray-600"
+                                        >
+                                            <X size={18} />
+                                        </button>
+                                    )}
+                                </div>
+
+                                {/* Filter Button */}
+                                <div className="flex items-center justify-between">
+                                    <button
+                                        onClick={() => setShowFilters(!showFilters)}
+                                        className="flex items-center gap-2 text-sm text-gray-600 hover:text-blue-600 font-medium"
+                                    >
+                                        <Filter size={16} />
+                                        {selectedType !== 'All' ? `${selectedType}` : 'Filter by Type'}
+                                    </button>
+                                    
+                                    {(jobSearch || selectedType !== 'All') && (
+                                        <button
+                                            onClick={clearFilters}
+                                            className="text-sm text-red-600 hover:text-red-700 font-medium flex items-center gap-1"
+                                        >
+                                            <X size={14} />
+                                            Clear All
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Main Tabs */}
+                        <div className="flex gap-2 mb-4">
+                            <button
+                                onClick={() => setJobTab('all')}
+                                className={`flex-1 py-2.5 px-4 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                                    jobTab === 'all'
+                                        ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200'
+                                }`}
+                            >
+                                <Search size={16} />
+                                Find Jobs
+                            </button>
+                            <button
+                                onClick={() => setJobTab('my')}
+                                className={`flex-1 py-2.5 px-4 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                                    jobTab === 'my'
+                                        ? 'bg-gradient-to-r from-green-600 to-green-700 text-white shadow-lg'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200'
+                                }`}
+                            >
+                                <Briefcase size={16} />
+                                My Listings
+                            </button>
+                            <button
+                                onClick={() => setJobTab('new')}
+                                className={`py-2.5 px-4 rounded-xl text-sm font-bold transition-all duration-200 active:scale-95 flex items-center gap-2 ${
+                                    jobTab === 'new' 
+                                        ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg shadow-blue-200/50' 
+                                        : 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-sm hover:shadow-md hover:shadow-blue-200/50'
+                                }`}
+                            >
+                                <Plus size={18} />
+                                Post Job
+                            </button>
+                        </div>
+
+                        {/* Job Type Filters */}
+                        {showFilters && jobTab !== 'new' && (
+                            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-4 animate-fade-in mb-4">
+                                <h4 className="text-sm font-bold text-gray-900 mb-3">Filter by Job Type</h4>
+                                <div className="flex flex-wrap gap-2">
+                                    {jobTypes.map(type => (
+                                        <button
+                                            key={type}
+                                            onClick={() => {
+                                                setSelectedType(type);
+                                                setShowFilters(false);
+                                            }}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1 ${
+                                                selectedType === type
+                                                    ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow'
+                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                            }`}
+                                        >
+                                            <Briefcase size={12} />
+                                            {type}
+                                            {selectedType === type && (
+                                                <CheckCircle size={12} className="ml-1" />
+                                            )}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Stats Banner */}
+                    {jobTab !== 'new' && (
+                        <div className="mb-6">
+                            <div className="bg-gradient-to-r from-blue-600/10 to-blue-500/10 backdrop-blur-sm rounded-2xl border border-blue-200/50 p-4">
+                                <div className="grid grid-cols-3 gap-4">
+                                    <div className="bg-white/80 rounded-xl p-3 text-center">
+                                        <div className="text-2xl font-bold text-gray-900">{jobs.length}</div>
+                                        <div className="text-xs text-gray-600">Total Jobs</div>
+                                    </div>
+                                    <div className="bg-white/80 rounded-xl p-3 text-center">
+                                        <div className="text-2xl font-bold text-gray-900">
+                                            {jobs.filter(j => j.is_owner).length}
+                                        </div>
+                                        <div className="text-xs text-gray-600">My Listings</div>
+                                    </div>
+                                    <div className="bg-white/80 rounded-xl p-3 text-center">
+                                        <div className="text-2xl font-bold text-gray-900">
+                                            {selectedType === 'All' ? jobs.length : filteredJobs.length}
+                                        </div>
+                                        <div className="text-xs text-gray-600">{selectedType}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Content Area */}
                     {jobTab === 'new' ? (
                         // Post Job Form
-                        <div className="bg-white rounded-3xl p-5 shadow-sm border border-primary-900/10 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            <div className="text-center mb-6">
-                                <div className="w-12 h-12 bg-primary-50 rounded-full flex items-center justify-center mx-auto mb-2 text-primary-600 ring-1 ring-primary-900/10">
-                                    <Briefcase size={24} />
+                        <div>
+                            {/* Form Header */}
+                            <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl shadow-xl overflow-hidden mb-6">
+                                <div className="p-6 text-white text-center">
+                                    <div className="w-16 h-16 bg-white/20 backdrop-blur-sm rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                        <Briefcase size={28} className="text-white" />
+                                    </div>
+                                    <h2 className="text-xl font-bold mb-2">Post a Job Opening</h2>
+                                    <p className="text-sm opacity-90">Find the best talent in your network</p>
                                 </div>
-                                <h3 className="font-bold text-gray-800">Post a Job</h3>
-                                <p className="text-xs text-gray-400">Find the best talent in Kano</p>
                             </div>
 
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-700 mb-1">Job Title</label>
-                                    <input type="text" className="w-full bg-white border border-primary-900/10 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary-100 focus:border-primary-400 outline-none" placeholder="e.g. Sales Manager" />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-700 mb-1">Company</label>
-                                    <input type="text" className="w-full bg-white border border-primary-900/10 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary-100 focus:border-primary-400 outline-none" placeholder="Your Company Name" />
-                                </div>
-                                <div className="grid grid-cols-2 gap-3">
+                            {/* Form Body */}
+                            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 overflow-hidden mb-6">
+                                <div className="p-6 space-y-6">
+                                    {/* Job Info Section */}
                                     <div>
-                                        <label className="block text-xs font-medium text-gray-700 mb-1">Type</label>
-                                        <select className="w-full bg-white border border-primary-900/10 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary-100 focus:border-primary-400 outline-none text-gray-600">
-                                            <option>Full-time</option>
-                                            <option>Part-time</option>
-                                            <option>Contract</option>
-                                            <option>Remote</option>
-                                        </select>
+                                        <div className="flex items-center gap-2 mb-4">
+                                            <div className="w-6 h-6 bg-gradient-to-r from-blue-600 to-blue-700 rounded-lg flex items-center justify-center">
+                                                <Briefcase size={14} className="text-white" />
+                                            </div>
+                                            <h3 className="text-sm font-bold text-gray-900">Job Information</h3>
+                                        </div>
+                                        
+                                        <div className="space-y-4">
+                                            <div className="space-y-1.5">
+                                                <label className="text-xs font-semibold text-gray-700">Job Title *</label>
+                                                <input 
+                                                    type="text" 
+                                                    className="w-full px-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm"
+                                                    placeholder="e.g. Sales Manager"
+                                                />
+                                            </div>
+
+                                            <div className="space-y-1.5">
+                                                <label className="text-xs font-semibold text-gray-700">Company *</label>
+                                                <input 
+                                                    type="text" 
+                                                    className="w-full px-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm"
+                                                    placeholder="Your Company Name"
+                                                />
+                                            </div>
+
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="space-y-1.5">
+                                                    <label className="text-xs font-semibold text-gray-700">Job Type *</label>
+                                                    <div className="relative">
+                                                        <select className="w-full px-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl appearance-none focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm text-gray-700">
+                                                            <option>Select type...</option>
+                                                            {jobTypes.filter(t => t !== 'All').map(type => (
+                                                                <option key={type}>{type}</option>
+                                                            ))}
+                                                        </select>
+                                                        <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none">
+                                                            <div className="w-2 h-2 border-r-2 border-b-2 border-gray-400 transform rotate-45"></div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <label className="text-xs font-semibold text-gray-700">Salary Range</label>
+                                                    <div className="relative">
+                                                        <input 
+                                                            type="text" 
+                                                            className="w-full pl-12 pr-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm"
+                                                            placeholder="e.g. 150k-200k"
+                                                        />
+                                                        <DollarSign size={16} className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-1.5">
+                                                <label className="text-xs font-semibold text-gray-700">Location</label>
+                                                <div className="relative">
+                                                    <input 
+                                                        type="text" 
+                                                        className="w-full pl-12 pr-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm"
+                                                        placeholder="e.g. Kano, Nigeria"
+                                                    />
+                                                    <MapPin size={16} className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-1.5">
+                                                <label className="text-xs font-semibold text-gray-700">Job Description *</label>
+                                                <textarea 
+                                                    className="w-full px-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm min-h-[140px] resize-none"
+                                                    placeholder="Describe the role, requirements, and benefits..."
+                                                />
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <label className="block text-xs font-medium text-gray-700 mb-1">Salary Range</label>
-                                        <input type="text" className="w-full bg-white border border-primary-900/10 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary-100 focus:border-primary-400 outline-none" placeholder="e.g. 150k-200k" />
-                                    </div>
+
+                                    {/* Submit Button */}
+                                    <button className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200/50 active:scale-[0.98] transition-all duration-200 text-sm mt-4">
+                                        Publish Job Listing
+                                    </button>
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-700 mb-1">Description</label>
-                                    <textarea className="w-full bg-white border border-primary-900/10 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary-100 focus:border-primary-400 outline-none h-32 resize-none" placeholder="Job requirements and details..."></textarea>
-                                </div>
-                                <button className="w-full bg-primary-600 text-white font-bold py-3 rounded-xl shadow-lg shadow-primary-200 active:scale-[0.98] transition-all border border-primary-900/10">
-                                    Publish Listing
-                                </button>
                             </div>
                         </div>
                     ) : (
-                        // Job List
-                        <div className="space-y-3">
-                            {filteredJobs.map(job => (
-                                <div key={job.id} className="bg-white p-4 rounded-2xl shadow-sm border border-primary-900/10 hover:shadow-md transition-shadow">
-                                    <div className="flex justify-between items-start mb-2">
-                                        <div className="flex gap-3">
-                                            <div className="w-10 h-10 rounded-lg bg-gray-50 border border-primary-900/10 p-0.5 shrink-0">
-                                                <img src={job.logo_url} alt={job.company} className="w-full h-full object-cover rounded-md" />
-                                            </div>
-                                            <div>
-                                                <h3 className="font-bold text-sm text-gray-800 leading-tight">{job.title}</h3>
-                                                <p className="text-xs text-gray-500">{job.company}</p>
-                                            </div>
-                                        </div>
-                                        <span className="bg-primary-50 text-primary-700 text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wide border border-primary-900/10">
-                                            {job.type}
-                                        </span>
+                        // Job List View
+                        <div>
+                            {filteredJobs.length === 0 ? (
+                                <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-8 text-center">
+                                    <div className="w-16 h-16 bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                        <Search className="w-8 h-8 text-blue-600" />
                                     </div>
-
-                                    <div className="flex items-center gap-4 mt-3 mb-4">
-                                        <div className="flex items-center gap-1.5 text-gray-400">
-                                            <MapPin size={14} />
-                                            <span className="text-xs">{job.location}</span>
-                                        </div>
-                                        <div className="flex items-center gap-1.5 text-gray-400">
-                                            <DollarSign size={14} />
-                                            <span className="text-xs">{job.salary_range}</span>
-                                        </div>
-                                        <div className="flex items-center gap-1.5 text-gray-400">
-                                            <Clock size={14} />
-                                            <span className="text-xs">{job.posted_at}</span>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex gap-2">
-                                        <button className="flex-1 bg-primary-600 text-white text-xs font-bold py-2 rounded-xl shadow-sm shadow-primary-200 border border-primary-900/10 active:scale-95 transition-transform">
-                                            {job.is_owner ? 'Manage Listing' : 'Apply Now'}
+                                    <h4 className="text-lg font-bold text-gray-900 mb-2">
+                                        {jobTab === 'all' ? 'No Jobs Found' : 'No Jobs in Your Listings'}
+                                    </h4>
+                                    <p className="text-gray-600 text-sm mb-6">
+                                        {jobSearch || selectedType !== 'All'
+                                            ? 'Try adjusting your search or filters'
+                                            : jobTab === 'all'
+                                            ? 'No job listings available'
+                                            : 'Post your first job to get started'}
+                                    </p>
+                                    {(jobSearch || selectedType !== 'All') && (
+                                        <button
+                                            onClick={clearFilters}
+                                            className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-sm font-bold px-6 py-3 rounded-lg transition-colors active:scale-95"
+                                        >
+                                            Clear Filters
                                         </button>
-                                        {!job.is_owner && (
-                                            <button className="px-3 bg-gray-50 text-gray-500 rounded-xl border border-primary-900/10 hover:bg-gray-100 transition-colors">
-                                                <Briefcase size={16} />
-                                            </button>
-                                        )}
-                                    </div>
+                                    )}
+                                    {jobTab === 'my' && filteredJobs.length === 0 && !jobSearch && selectedType === 'All' && (
+                                        <button
+                                            onClick={() => setJobTab('new')}
+                                            className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-sm font-bold px-6 py-3 rounded-lg transition-colors active:scale-95 mt-2"
+                                        >
+                                            Post Your First Job
+                                        </button>
+                                    )}
                                 </div>
-                            ))}
-                            {filteredJobs.length === 0 && (
-                                <div className="text-center py-10">
-                                    <p className="text-gray-400 text-sm">No jobs found.</p>
+                            ) : (
+                                <div className="space-y-4">
+                                    {filteredJobs.map((job) => (
+                                        <div 
+                                            key={job.id} 
+                                            className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 overflow-hidden hover:shadow-xl transition-shadow"
+                                        >
+                                            {/* Job Header */}
+                                            <div className="p-4">
+                                                <div className="flex items-start justify-between">
+                                                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                                                        <div className="relative">
+                                                            <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center text-white font-bold overflow-hidden">
+                                                                {job.logo_url ? (
+                                                                    <img 
+                                                                        src={job.logo_url} 
+                                                                        alt={job.company}
+                                                                        className="w-full h-full object-cover"
+                                                                    />
+                                                                ) : (
+                                                                    job.company.substring(0, 2).toUpperCase()
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2">
+                                                                <h3 className="text-sm font-bold text-gray-900 truncate">
+                                                                    {job.title}
+                                                                </h3>
+                                                            </div>
+                                                            <p className="text-xs text-gray-600 truncate mt-1">
+                                                                {job.company}
+                                                            </p>
+                                                            <div className="flex items-center gap-2 mt-1">
+                                                                <span className="px-2 py-0.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white text-[10px] font-bold rounded-lg">
+                                                                    {job.type}
+                                                                </span>
+                                                                <span className="text-xs text-gray-500 flex items-center gap-1">
+                                                                    <DollarSign size={10} />
+                                                                    {job.salary_range}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    {/* Posted Time */}
+                                                    <div className="flex-shrink-0 ml-2">
+                                                        <span className="text-xs text-gray-400">
+                                                            {job.posted_at}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Job Details */}
+                                            <div className="px-4 pb-4 border-t border-gray-100 pt-3">
+                                                <div className="space-y-2">
+                                                    <div className="flex items-center gap-2 text-xs text-gray-600">
+                                                        <MapPin size={12} />
+                                                        <span>{job.location}</span>
+                                                    </div>
+                                                    
+                                                    <div className="flex items-center gap-2 text-xs text-gray-600">
+                                                        <Clock size={12} />
+                                                        <span>Posted {job.posted_at}</span>
+                                                    </div>
+                                                </div>
+
+                                                {/* Action Buttons */}
+                                                <div className="flex gap-2 mt-4">
+                                                    <button className="flex-1 py-2.5 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-sm font-bold rounded-lg transition-all active:scale-95">
+                                                        {job.is_owner ? 'Manage Listing' : 'Apply Now'}
+                                                    </button>
+                                                    {!job.is_owner && (
+                                                        <button className="px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-lg transition-colors flex items-center justify-center">
+                                                            <Briefcase size={16} />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
                             )}
                         </div>
                     )}
-                </div>
+                </main>
             </div>
         );
     }
 
     // --- MAIN EXPLORE VIEW ---
     return (
-        <div className="pb-24 bg-gray-50 min-h-screen">
-            <Header title="Explore GKBC" showSearch={false} />
+        <div className="min-h-screen bg-gradient-to-b from-gray-50 to-blue-50">
+            {/* Fixed Header */}
+            <Header title="Explore GKBC" showBack={false} />
 
-            {/* Quick Actions Grid */}
-            <div className="grid grid-cols-4 gap-2 px-4 py-6 bg-white rounded-b-[2rem] shadow-sm border-b border-primary-900/10 mb-6">
-                <QuickAction icon={Briefcase} label="Jobs" color="bg-blue-600" onClick={() => setView('jobs')} />
-                <QuickAction icon={Calendar} label="Events" color="bg-orange-500" onClick={() => navigate('/events')} />
-                <QuickAction icon={ShoppingBag} label="Market" color="bg-emerald-500" onClick={() => navigate('/market')} />
-                <QuickAction icon={Video} label="Media" color="bg-purple-500" onClick={() => navigate('/media')} />
-            </div>
-
-            {/* Upcoming Events Section */}
-            <div className="px-4 mb-6">
-                <div className="flex justify-between items-center mb-3">
-                    <h2 className="text-lg font-bold text-gray-800">Upcoming Events</h2>
-                    <span 
-                        onClick={() => navigate('/events')} 
-                        className="text-xs text-primary-600 font-medium cursor-pointer"
-                    >
-                        View All
-                    </span>
+            {/* Main Content - MATCHING MEMBERS PAGE WIDTH */}
+            <main className="px-4 pt-4 pb-24 max-w-screen-sm mx-auto">
+                {/* Quick Actions Grid */}
+                <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-6 mb-6">
+                    <div className="grid grid-cols-4 gap-4">
+                        <QuickAction 
+                            icon={Briefcase} 
+                            label="Jobs" 
+                            color="bg-gradient-to-br from-blue-600 to-blue-700" 
+                            onClick={() => setView('jobs')} 
+                        />
+                        <QuickAction 
+                            icon={Calendar} 
+                            label="Events" 
+                            color="bg-gradient-to-br from-orange-500 to-orange-600" 
+                            onClick={() => navigate('/events')} 
+                        />
+                        <QuickAction 
+                            icon={ShoppingBag} 
+                            label="Market" 
+                            color="bg-gradient-to-br from-emerald-500 to-emerald-600" 
+                            onClick={() => navigate('/market')} 
+                        />
+                        <QuickAction 
+                            icon={Video} 
+                            label="Media" 
+                            color="bg-gradient-to-br from-purple-500 to-purple-600" 
+                            onClick={() => navigate('/media')} 
+                        />
+                    </div>
                 </div>
-                
-                <div className="flex overflow-x-auto gap-4 no-scrollbar pb-2">
-                    {events.map(event => (
-                        <div 
-                            key={event.id} 
-                            onClick={() => navigate(`/event/${event.id}`)}
-                            className="min-w-[260px] bg-white rounded-2xl p-3 shadow-sm border border-primary-900/10 cursor-pointer hover:shadow-md transition-all active:scale-[0.98]"
+
+                {/* Upcoming Events Section */}
+                <div className="mb-8">
+                    <div className="flex justify-between items-center mb-4">
+                        <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 bg-gradient-to-r from-orange-600 to-orange-700 rounded-lg flex items-center justify-center">
+                                <Calendar size={16} className="text-white" />
+                            </div>
+                            <h2 className="text-lg font-bold text-gray-900">Upcoming Events</h2>
+                        </div>
+                        <button 
+                            onClick={() => navigate('/events')}
+                            className="text-sm text-blue-600 hover:text-blue-700 font-bold"
                         >
-                            <div className="h-32 rounded-xl bg-gray-200 mb-3 relative overflow-hidden">
-                                <img src={event.image_url} alt={event.title} className="w-full h-full object-cover" />
-                                <div className="absolute top-2 right-2 bg-white/90 backdrop-blur rounded-lg px-2 py-1 text-xs font-bold text-primary-700 border border-primary-900/10">
-                                    Nov 12
+                            View All
+                        </button>
+                    </div>
+                    
+                    <div className="flex overflow-x-auto gap-4 scrollbar-hide scroll-smooth pb-2 -mx-4 px-4">
+                        {events.slice(0, 3).map(event => (
+                            <div 
+                                key={event.id} 
+                                onClick={() => navigate(`/event/${event.id}`)}
+                                className="min-w-[280px] bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 overflow-hidden hover:shadow-xl transition-shadow active:scale-[0.98]"
+                            >
+                                <div className="h-40 bg-gradient-to-br from-orange-100 to-orange-50 relative overflow-hidden">
+                                    {event.image_url && (
+                                        <img 
+                                            src={event.image_url} 
+                                            alt={event.title} 
+                                            className="w-full h-full object-cover"
+                                        />
+                                    )}
+                                    <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-sm rounded-xl px-3 py-1.5 text-xs font-bold text-orange-700 shadow-sm">
+                                        Nov 12
+                                    </div>
+                                </div>
+                                <div className="p-4">
+                                    <h3 className="font-bold text-gray-900 text-sm mb-2 line-clamp-2">{event.title}</h3>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center gap-2 text-xs text-gray-600">
+                                            <Clock size={12} />
+                                            <span>{event.start_time}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 text-xs text-gray-600">
+                                            <MapPin size={12} />
+                                            <span className="line-clamp-1">{event.location}</span>
+                                        </div>
+                                    </div>
+                                    <button className="w-full mt-4 py-2.5 bg-gradient-to-r from-orange-600 to-orange-700 text-white text-sm font-bold rounded-lg transition-all active:scale-95">
+                                        View Details
+                                    </button>
                                 </div>
                             </div>
-                            <h3 className="font-bold text-gray-800 text-sm mb-1">{event.title}</h3>
-                            <div className="flex items-center gap-2 mb-1">
-                                <Clock size={12} className="text-gray-400" />
-                                <span className="text-[10px] text-gray-500">{event.start_time}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <MapPin size={12} className="text-gray-400" />
-                                <span className="text-[10px] text-gray-500">{event.location}</span>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </div>
-
-            {/* Classifieds Section */}
-            <div className="px-4">
-                 <div className="flex justify-between items-center mb-3">
-                    <h2 className="text-lg font-bold text-gray-800">Marketplace</h2>
-                    <span 
-                        className="text-xs text-primary-600 font-medium cursor-pointer" 
-                        onClick={() => navigate('/market')}
-                    >
-                        View All
-                    </span>
+                        ))}
+                    </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                    {classifieds.map(item => (
-                        <div key={item.id} onClick={() => navigate(`/market/${item.id}`)} className="bg-white p-2 rounded-2xl shadow-sm border border-primary-900/10 active:scale-[0.98] transition-transform">
-                            <div className="h-28 rounded-xl bg-gray-100 mb-2 overflow-hidden border border-primary-900/10">
-                                <img src={item.image_url} alt={item.title} className="w-full h-full object-cover" />
+                {/* Marketplace Section */}
+                <div>
+                    <div className="flex justify-between items-center mb-4">
+                        <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 bg-gradient-to-r from-emerald-600 to-emerald-700 rounded-lg flex items-center justify-center">
+                                <ShoppingBag size={16} className="text-white" />
                             </div>
-                            <h4 className="font-bold text-xs text-gray-800 line-clamp-1">{item.title}</h4>
-                            <p className="text-primary-600 font-bold text-sm">{item.price}</p>
-                            <span className="text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded mt-1 inline-block border border-primary-900/10">
-                                {item.category}
-                            </span>
+                            <h2 className="text-lg font-bold text-gray-900">Marketplace</h2>
                         </div>
-                    ))}
+                        <button 
+                            onClick={() => navigate('/market')}
+                            className="text-sm text-blue-600 hover:text-blue-700 font-bold"
+                        >
+                            View All
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        {classifieds.slice(0, 4).map(item => (
+                            <div 
+                                key={item.id} 
+                                onClick={() => navigate(`/market/${item.id}`)}
+                                className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 overflow-hidden hover:shadow-xl transition-shadow active:scale-[0.98]"
+                            >
+                                <div className="h-36 bg-gradient-to-br from-emerald-100 to-emerald-50 overflow-hidden">
+                                    {item.image_url && (
+                                        <img 
+                                            src={item.image_url} 
+                                            alt={item.title} 
+                                            className="w-full h-full object-cover"
+                                        />
+                                    )}
+                                </div>
+                                <div className="p-3">
+                                    <h4 className="font-bold text-gray-900 text-xs mb-1 line-clamp-1">{item.title}</h4>
+                                    <p className="text-blue-600 font-bold text-sm mb-2">{item.price}</p>
+                                    <div className="flex items-center justify-between">
+                                        <span className="px-2 py-1 bg-gradient-to-r from-emerald-600 to-emerald-700 text-white text-[10px] font-bold rounded-lg">
+                                            {item.category}
+                                        </span>
+                                        <span className="text-[10px] text-gray-500">{item.posted_at}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 </div>
-            </div>
+
+                {/* Stats Banner */}
+                <div className="mt-8">
+                    <div className="bg-gradient-to-r from-blue-600/10 to-blue-500/10 backdrop-blur-sm rounded-2xl border border-blue-200/50 p-4">
+                        <div className="grid grid-cols-3 gap-4">
+                            <div className="bg-white/80 rounded-xl p-3 text-center">
+                                <div className="text-2xl font-bold text-gray-900">{events.length}</div>
+                                <div className="text-xs text-gray-600">Events</div>
+                            </div>
+                            <div className="bg-white/80 rounded-xl p-3 text-center">
+                                <div className="text-2xl font-bold text-gray-900">
+                                    {classifieds.length}
+                                </div>
+                                <div className="text-xs text-gray-600">Listings</div>
+                            </div>
+                            <div className="bg-white/80 rounded-xl p-3 text-center">
+                                <div className="text-2xl font-bold text-gray-900">
+                                    {jobs.length}
+                                </div>
+                                <div className="text-xs text-gray-600">Jobs</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
         </div>
     );
 };
