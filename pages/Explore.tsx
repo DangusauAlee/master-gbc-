@@ -5,7 +5,6 @@ import {
   Calendar, 
   Newspaper, 
   ShoppingBag, 
-  Video, 
   ChevronLeft, 
   MapPin, 
   Clock, 
@@ -15,14 +14,10 @@ import {
   DollarSign, 
   Filter,
   X,
-  Loader2,
-  CheckCircle,
-  Users,
-  Building,
-  TrendingUp
+  CheckCircle
 } from 'lucide-react';
 import { Event, Classified, Job } from '../types';
-import { getEvents, getClassifieds, getJobs } from '../services/mockApi';
+import { supabase } from '../services/supabase';
 
 const Explore = () => {
     const [view, setView] = useState<'explore' | 'jobs'>('explore');
@@ -38,20 +33,66 @@ const Explore = () => {
     const [loading, setLoading] = useState(true);
     const [selectedType, setSelectedType] = useState("All");
     const [showFilters, setShowFilters] = useState(false);
+    const [currentUser, setCurrentUser] = useState<any>(null);
+
+    useEffect(() => {
+        // Get current user
+        const getUser = async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            setCurrentUser(user);
+        };
+        getUser();
+    }, []);
 
     useEffect(() => {
         const fetchData = async () => {
             try {
                 setLoading(true);
-                const [eventsData, classifiedsData, jobsData] = await Promise.all([
-                    getEvents(),
-                    getClassifieds(),
-                    getJobs()
-                ]);
-                setEvents(eventsData);
-                setClassifieds(classifiedsData);
-                setJobs(jobsData);
-                setFilteredJobs(jobsData);
+                
+                // Fetch events
+                const { data: eventsData, error: eventsError } = await supabase
+                    .from('events')
+                    .select('*')
+                    .order('start_time', { ascending: true })
+                    .gte('start_time', new Date().toISOString())
+                    .limit(3);
+
+                if (eventsError) throw eventsError;
+                
+                // Fetch classifieds
+                const { data: classifiedsData, error: classifiedsError } = await supabase
+                    .from('classifieds')
+                    .select('*')
+                    .order('created_at', { ascending: false })
+                    .limit(4);
+
+                if (classifiedsError) throw classifiedsError;
+                
+                // Fetch jobs
+                const { data: jobsData, error: jobsError } = await supabase
+                    .from('jobs')
+                    .select('*')
+                    .order('created_at', { ascending: false });
+
+                if (jobsError) throw jobsError;
+                
+                // Mark user's jobs with is_owner flag
+                let userId = null;
+                if (currentUser) {
+                    // In your schema, profiles.id is the same as auth.users.id
+                    // So we can use currentUser.id directly as the profile id
+                    userId = currentUser.id;
+                }
+
+                const jobsWithOwnership = jobsData?.map(job => ({
+                    ...job,
+                    is_owner: userId ? job.employer_id === userId : false
+                })) || [];
+
+                setEvents(eventsData || []);
+                setClassifieds(classifiedsData || []);
+                setJobs(jobsWithOwnership || []);
+                setFilteredJobs(jobsWithOwnership || []);
             } catch (error) {
                 console.error('Error fetching data:', error);
             } finally {
@@ -59,7 +100,7 @@ const Explore = () => {
             }
         };
         fetchData();
-    }, []);
+    }, [currentUser]);
 
     useEffect(() => {
         let result = jobs;
@@ -73,7 +114,7 @@ const Explore = () => {
             result = result.filter(job => 
                 job.title.toLowerCase().includes(term) || 
                 job.company.toLowerCase().includes(term) ||
-                job.location.toLowerCase().includes(term)
+                job.location?.toLowerCase().includes(term)
             );
         }
 
@@ -102,6 +143,153 @@ const Explore = () => {
         setJobSearch("");
         setSelectedType("All");
         setJobTab('all');
+    };
+
+    const formatEventDate = (timestamp: string) => {
+        const date = new Date(timestamp);
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+
+    const formatEventTime = (timestamp: string) => {
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    };
+
+    const formatTimeAgo = (timestamp: string) => {
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+        
+        if (diffInSeconds < 60) return 'Just now';
+        if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+        if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+        if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+
+    const [jobForm, setJobForm] = useState({
+        title: '',
+        company: '',
+        type: '',
+        salary_range: '',
+        location: '',
+        description: '',
+    });
+
+    const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+        const { name, value } = e.target;
+        setJobForm(prev => ({
+            ...prev,
+            [name]: value
+        }));
+    };
+
+    const handlePostJob = async () => {
+        if (!jobForm.title || !jobForm.company || !jobForm.description) {
+            alert('Please fill in all required fields');
+            return;
+        }
+
+        try {
+            // Get authenticated user
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) {
+                alert('Please sign in to post a job');
+                return;
+            }
+
+            // Check if profile exists in the profiles table
+            // In your schema, profiles.id is the same as auth.users.id
+            const { data: existingProfile, error: profileError } = await supabase
+                .from('profiles')
+                .select('id')
+                .eq('id', user.id)
+                .single();
+
+            if (profileError && profileError.code !== 'PGRST116') { // PGRST116 is "not found"
+                throw profileError;
+            }
+
+            // If profile doesn't exist, create one
+            let profileId = user.id;
+            if (!existingProfile) {
+                // Create a basic profile for the user
+                const { data: newProfile, error: createError } = await supabase
+                    .from('profiles')
+                    .insert([
+                        {
+                            id: user.id,
+                            first_name: user.user_metadata?.full_name?.split(' ')[0] || 'User',
+                            email: user.email || '',
+                            last_name: user.user_metadata?.full_name?.split(' ').slice(1).join(' ') || '',
+                            role: 'member',
+                            approval_status: 'pending'
+                        }
+                    ])
+                    .select('id')
+                    .single();
+
+                if (createError) {
+                    console.error('Error creating profile:', createError);
+                    throw createError;
+                }
+                profileId = newProfile.id;
+            } else {
+                profileId = existingProfile.id;
+            }
+
+            const newJob = {
+                title: jobForm.title,
+                company: jobForm.company,
+                type: jobForm.type || null,
+                salary_range: jobForm.salary_range || null,
+                location: jobForm.location || null,
+                description: jobForm.description,
+                employer_id: profileId,
+                created_at: new Date().toISOString(),
+            };
+
+            const { data, error } = await supabase
+                .from('jobs')
+                .insert([newJob])
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            // Refresh jobs list
+            const { data: updatedJobs, error: jobsError } = await supabase
+                .from('jobs')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+            if (jobsError) throw jobsError;
+
+            // Mark ownership
+            const jobsWithOwnership = updatedJobs?.map(job => ({
+                ...job,
+                is_owner: job.employer_id === profileId
+            })) || [];
+
+            setJobs(jobsWithOwnership);
+            setFilteredJobs(jobsWithOwnership);
+            
+            // Reset form and switch to my listings
+            setJobForm({
+                title: '',
+                company: '',
+                type: '',
+                salary_range: '',
+                location: '',
+                description: '',
+            });
+            setJobTab('my');
+            
+            alert('Job posted successfully!');
+        } catch (error) {
+            console.error('Error posting job:', error);
+            alert('Failed to post job. Please try again.');
+        }
     };
 
     if (loading) {
@@ -311,8 +499,11 @@ const Explore = () => {
                                                 <label className="text-xs font-semibold text-gray-700">Job Title *</label>
                                                 <input 
                                                     type="text" 
+                                                    name="title"
                                                     className="w-full px-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm"
                                                     placeholder="e.g. Sales Manager"
+                                                    value={jobForm.title}
+                                                    onChange={handleFormChange}
                                                 />
                                             </div>
 
@@ -320,19 +511,27 @@ const Explore = () => {
                                                 <label className="text-xs font-semibold text-gray-700">Company *</label>
                                                 <input 
                                                     type="text" 
+                                                    name="company"
                                                     className="w-full px-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm"
                                                     placeholder="Your Company Name"
+                                                    value={jobForm.company}
+                                                    onChange={handleFormChange}
                                                 />
                                             </div>
 
                                             <div className="grid grid-cols-2 gap-4">
                                                 <div className="space-y-1.5">
-                                                    <label className="text-xs font-semibold text-gray-700">Job Type *</label>
+                                                    <label className="text-xs font-semibold text-gray-700">Job Type</label>
                                                     <div className="relative">
-                                                        <select className="w-full px-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl appearance-none focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm text-gray-700">
-                                                            <option>Select type...</option>
+                                                        <select 
+                                                            name="type"
+                                                            className="w-full px-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl appearance-none focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm text-gray-700"
+                                                            value={jobForm.type}
+                                                            onChange={handleFormChange}
+                                                        >
+                                                            <option value="">Select type...</option>
                                                             {jobTypes.filter(t => t !== 'All').map(type => (
-                                                                <option key={type}>{type}</option>
+                                                                <option key={type} value={type}>{type}</option>
                                                             ))}
                                                         </select>
                                                         <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none">
@@ -345,8 +544,11 @@ const Explore = () => {
                                                     <div className="relative">
                                                         <input 
                                                             type="text" 
+                                                            name="salary_range"
                                                             className="w-full pl-12 pr-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm"
                                                             placeholder="e.g. 150k-200k"
+                                                            value={jobForm.salary_range}
+                                                            onChange={handleFormChange}
                                                         />
                                                         <DollarSign size={16} className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
                                                     </div>
@@ -358,8 +560,11 @@ const Explore = () => {
                                                 <div className="relative">
                                                     <input 
                                                         type="text" 
+                                                        name="location"
                                                         className="w-full pl-12 pr-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm"
                                                         placeholder="e.g. Kano, Nigeria"
+                                                        value={jobForm.location}
+                                                        onChange={handleFormChange}
                                                     />
                                                     <MapPin size={16} className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
                                                 </div>
@@ -368,15 +573,21 @@ const Explore = () => {
                                             <div className="space-y-1.5">
                                                 <label className="text-xs font-semibold text-gray-700">Job Description *</label>
                                                 <textarea 
+                                                    name="description"
                                                     className="w-full px-4 py-3.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 transition-all duration-200 text-sm min-h-[140px] resize-none"
                                                     placeholder="Describe the role, requirements, and benefits..."
+                                                    value={jobForm.description}
+                                                    onChange={handleFormChange}
                                                 />
                                             </div>
                                         </div>
                                     </div>
 
                                     {/* Submit Button */}
-                                    <button className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200/50 active:scale-[0.98] transition-all duration-200 text-sm mt-4">
+                                    <button 
+                                        onClick={handlePostJob}
+                                        className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200/50 active:scale-[0.98] transition-all duration-200 text-sm mt-4"
+                                    >
                                         Publish Job Listing
                                     </button>
                                 </div>
@@ -451,13 +662,17 @@ const Explore = () => {
                                                                 {job.company}
                                                             </p>
                                                             <div className="flex items-center gap-2 mt-1">
-                                                                <span className="px-2 py-0.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white text-[10px] font-bold rounded-lg">
-                                                                    {job.type}
-                                                                </span>
-                                                                <span className="text-xs text-gray-500 flex items-center gap-1">
-                                                                    <DollarSign size={10} />
-                                                                    {job.salary_range}
-                                                                </span>
+                                                                {job.type && (
+                                                                    <span className="px-2 py-0.5 bg-gradient-to-r from-blue-600 to-blue-700 text-white text-[10px] font-bold rounded-lg">
+                                                                        {job.type}
+                                                                    </span>
+                                                                )}
+                                                                {job.salary_range && (
+                                                                    <span className="text-xs text-gray-500 flex items-center gap-1">
+                                                                        <DollarSign size={10} />
+                                                                        {job.salary_range}
+                                                                    </span>
+                                                                )}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -465,7 +680,7 @@ const Explore = () => {
                                                     {/* Posted Time */}
                                                     <div className="flex-shrink-0 ml-2">
                                                         <span className="text-xs text-gray-400">
-                                                            {job.posted_at}
+                                                            {formatTimeAgo(job.created_at)}
                                                         </span>
                                                     </div>
                                                 </div>
@@ -474,14 +689,16 @@ const Explore = () => {
                                             {/* Job Details */}
                                             <div className="px-4 pb-4 border-t border-gray-100 pt-3">
                                                 <div className="space-y-2">
-                                                    <div className="flex items-center gap-2 text-xs text-gray-600">
-                                                        <MapPin size={12} />
-                                                        <span>{job.location}</span>
-                                                    </div>
+                                                    {job.location && (
+                                                        <div className="flex items-center gap-2 text-xs text-gray-600">
+                                                            <MapPin size={12} />
+                                                            <span>{job.location}</span>
+                                                        </div>
+                                                    )}
                                                     
                                                     <div className="flex items-center gap-2 text-xs text-gray-600">
                                                         <Clock size={12} />
-                                                        <span>Posted {job.posted_at}</span>
+                                                        <span>Posted {formatTimeAgo(job.created_at)}</span>
                                                     </div>
                                                 </div>
 
@@ -518,7 +735,7 @@ const Explore = () => {
             <main className="px-4 pt-4 pb-24 max-w-screen-sm mx-auto">
                 {/* Quick Actions Grid */}
                 <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-6 mb-6">
-                    <div className="grid grid-cols-4 gap-4">
+                    <div className="grid grid-cols-3 gap-4">
                         <QuickAction 
                             icon={Briefcase} 
                             label="Jobs" 
@@ -536,12 +753,6 @@ const Explore = () => {
                             label="Market" 
                             color="bg-gradient-to-br from-emerald-500 to-emerald-600" 
                             onClick={() => navigate('/market')} 
-                        />
-                        <QuickAction 
-                            icon={Video} 
-                            label="Media" 
-                            color="bg-gradient-to-br from-purple-500 to-purple-600" 
-                            onClick={() => navigate('/media')} 
                         />
                     </div>
                 </div>
@@ -579,7 +790,7 @@ const Explore = () => {
                                         />
                                     )}
                                     <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-sm rounded-xl px-3 py-1.5 text-xs font-bold text-orange-700 shadow-sm">
-                                        Nov 12
+                                        {formatEventDate(event.start_time)}
                                     </div>
                                 </div>
                                 <div className="p-4">
@@ -587,12 +798,14 @@ const Explore = () => {
                                     <div className="space-y-2">
                                         <div className="flex items-center gap-2 text-xs text-gray-600">
                                             <Clock size={12} />
-                                            <span>{event.start_time}</span>
+                                            <span>{formatEventTime(event.start_time)}</span>
                                         </div>
-                                        <div className="flex items-center gap-2 text-xs text-gray-600">
-                                            <MapPin size={12} />
-                                            <span className="line-clamp-1">{event.location}</span>
-                                        </div>
+                                        {event.location && (
+                                            <div className="flex items-center gap-2 text-xs text-gray-600">
+                                                <MapPin size={12} />
+                                                <span className="line-clamp-1">{event.location}</span>
+                                            </div>
+                                        )}
                                     </div>
                                     <button className="w-full mt-4 py-2.5 bg-gradient-to-r from-orange-600 to-orange-700 text-white text-sm font-bold rounded-lg transition-all active:scale-95">
                                         View Details
@@ -638,12 +851,16 @@ const Explore = () => {
                                 </div>
                                 <div className="p-3">
                                     <h4 className="font-bold text-gray-900 text-xs mb-1 line-clamp-1">{item.title}</h4>
-                                    <p className="text-blue-600 font-bold text-sm mb-2">{item.price}</p>
+                                    {item.price && (
+                                        <p className="text-blue-600 font-bold text-sm mb-2">{item.price}</p>
+                                    )}
                                     <div className="flex items-center justify-between">
-                                        <span className="px-2 py-1 bg-gradient-to-r from-emerald-600 to-emerald-700 text-white text-[10px] font-bold rounded-lg">
-                                            {item.category}
-                                        </span>
-                                        <span className="text-[10px] text-gray-500">{item.posted_at}</span>
+                                        {item.category && (
+                                            <span className="px-2 py-1 bg-gradient-to-r from-emerald-600 to-emerald-700 text-white text-[10px] font-bold rounded-lg">
+                                                {item.category}
+                                            </span>
+                                        )}
+                                        <span className="text-[10px] text-gray-500">{formatTimeAgo(item.created_at)}</span>
                                     </div>
                                 </div>
                             </div>

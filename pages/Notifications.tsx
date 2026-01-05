@@ -20,7 +20,7 @@ import {
   Check
 } from 'lucide-react';
 import { Notification } from '../types';
-import { getNotifications } from '../services/mockApi';
+import { supabase } from '../services/supabase';
 
 const Notifications = () => {
     const navigate = useNavigate();
@@ -32,8 +32,46 @@ const Notifications = () => {
         const fetchNotifications = async () => {
             try {
                 setLoading(true);
-                const data = await getNotifications();
-                setNotifications(data);
+                
+                // Get current user
+                const { data: { user } } = await supabase.auth.getUser();
+                if (!user) {
+                    navigate('/login');
+                    return;
+                }
+                
+                // Fetch notifications from database
+                const { data: notificationsData, error } = await supabase
+                    .from('notifications')
+                    .select(`
+                        *,
+                        actor:profiles!notifications_actor_id_fkey (
+                            id,
+                            first_name,
+                            last_name,
+                            avatar_url
+                        )
+                    `)
+                    .eq('user_id', user.id)
+                    .order('created_at', { ascending: false });
+                
+                if (error) throw error;
+                
+                // Transform data to match your Notification type
+                const formattedNotifications = (notificationsData || []).map(notif => ({
+                    id: notif.id,
+                    type: notif.type as any,
+                    content: notif.content,
+                    actor_name: notif.actor 
+                        ? `${notif.actor.first_name || ''} ${notif.actor.last_name || ''}`.trim()
+                        : 'User',
+                    actor_avatar: notif.actor?.avatar_url,
+                    reference_id: notif.reference_id,
+                    is_read: notif.is_read,
+                    time: formatTimeAgo(notif.created_at)
+                }));
+                
+                setNotifications(formattedNotifications);
             } catch (error) {
                 console.error('Error fetching notifications:', error);
             } finally {
@@ -42,6 +80,18 @@ const Notifications = () => {
         };
         fetchNotifications();
     }, []);
+
+    const formatTimeAgo = (timestamp: string) => {
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+        
+        if (diffInSeconds < 60) return 'Just now';
+        if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+        if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+        if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
 
     const getIcon = (type: string) => {
         switch (type) {
@@ -76,37 +126,67 @@ const Notifications = () => {
         return notifications;
     };
 
-    const handleNotificationClick = (notif: Notification) => {
-        // Mark as read
-        const updatedNotifications = notifications.map(n => 
-            n.id === notif.id ? { ...n, is_read: true } : n
-        );
-        setNotifications(updatedNotifications);
+    const handleNotificationClick = async (notif: Notification) => {
+        try {
+            // Mark as read in database
+            const { error } = await supabase
+                .from('notifications')
+                .update({ is_read: true })
+                .eq('id', notif.id);
+            
+            if (error) console.error('Error updating notification:', error);
+            
+            // Update local state
+            const updatedNotifications = notifications.map(n => 
+                n.id === notif.id ? { ...n, is_read: true } : n
+            );
+            setNotifications(updatedNotifications);
 
-        // Navigate based on type
-        if (notif.type === 'message' && notif.reference_id) {
-            navigate(`/messages/chat/${notif.reference_id}`);
-        } else if ((notif.type === 'like' || notif.type === 'comment') && notif.reference_id) {
-            navigate(`/profile/${notif.reference_id}`);
-        } else if (notif.type === 'connection' && notif.reference_id) {
-            navigate(`/member/${notif.reference_id}`);
-        } else if (notif.type === 'event' && notif.reference_id) {
-            navigate(`/event/${notif.reference_id}`);
-        } else if (notif.type === 'market' && notif.reference_id) {
-            navigate(`/market/${notif.reference_id}`);
-        } else if (notif.type === 'job' && notif.reference_id) {
-            navigate(`/jobs/${notif.reference_id}`);
-        } else {
-            navigate('/profile');
+            // Navigate based on type
+            if (notif.type === 'message' && notif.reference_id) {
+                navigate(`/messages/chat/${notif.reference_id}`);
+            } else if ((notif.type === 'like' || notif.type === 'comment') && notif.reference_id) {
+                navigate(`/profile/${notif.reference_id}`);
+            } else if (notif.type === 'connection' && notif.reference_id) {
+                navigate(`/member/${notif.reference_id}`);
+            } else if (notif.type === 'event' && notif.reference_id) {
+                navigate(`/event/${notif.reference_id}`);
+            } else if (notif.type === 'market' && notif.reference_id) {
+                navigate(`/market/${notif.reference_id}`);
+            } else if (notif.type === 'job' && notif.reference_id) {
+                navigate(`/jobs/${notif.reference_id}`);
+            } else {
+                navigate('/profile');
+            }
+        } catch (error) {
+            console.error('Error handling notification click:', error);
         }
     };
 
-    const markAllAsRead = () => {
-        const updatedNotifications = notifications.map(notif => ({
-            ...notif,
-            is_read: true
-        }));
-        setNotifications(updatedNotifications);
+    const markAllAsRead = async () => {
+        try {
+            // Get current user
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+            
+            // Update in database
+            const { error } = await supabase
+                .from('notifications')
+                .update({ is_read: true })
+                .eq('user_id', user.id)
+                .eq('is_read', false);
+            
+            if (error) throw error;
+            
+            // Update local state
+            const updatedNotifications = notifications.map(notif => ({
+                ...notif,
+                is_read: true
+            }));
+            setNotifications(updatedNotifications);
+        } catch (error) {
+            console.error('Error marking all as read:', error);
+        }
     };
 
     const unreadCount = notifications.filter(n => !n.is_read).length;
@@ -287,10 +367,50 @@ const Notifications = () => {
                                         {/* Action Buttons for Connection Requests */}
                                         {notif.type === 'connection' && !notif.is_read && (
                                             <div className="flex gap-2 mt-4">
-                                                <button className="flex-1 py-2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-sm font-bold rounded-lg transition-all active:scale-95">
+                                                <button 
+                                                    onClick={async (e) => {
+                                                        e.stopPropagation();
+                                                        // Handle accept connection
+                                                        try {
+                                                            if (notif.reference_id) {
+                                                                const { error } = await supabase
+                                                                    .from('connections')
+                                                                    .update({ status: 'accepted' })
+                                                                    .eq('id', notif.reference_id);
+                                                                
+                                                                if (error) throw error;
+                                                                // Update notification as read
+                                                                handleNotificationClick(notif);
+                                                            }
+                                                        } catch (error) {
+                                                            console.error('Error accepting connection:', error);
+                                                        }
+                                                    }}
+                                                    className="flex-1 py-2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-sm font-bold rounded-lg transition-all active:scale-95"
+                                                >
                                                     Accept
                                                 </button>
-                                                <button className="flex-1 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-lg transition-colors">
+                                                <button 
+                                                    onClick={async (e) => {
+                                                        e.stopPropagation();
+                                                        // Handle ignore connection
+                                                        try {
+                                                            if (notif.reference_id) {
+                                                                const { error } = await supabase
+                                                                    .from('connections')
+                                                                    .delete()
+                                                                    .eq('id', notif.reference_id);
+                                                                
+                                                                if (error) throw error;
+                                                                // Update notification as read
+                                                                handleNotificationClick(notif);
+                                                            }
+                                                        } catch (error) {
+                                                            console.error('Error ignoring connection:', error);
+                                                        }
+                                                    }}
+                                                    className="flex-1 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-lg transition-colors"
+                                                >
                                                     Ignore
                                                 </button>
                                             </div>

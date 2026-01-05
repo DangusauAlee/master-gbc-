@@ -10,7 +10,7 @@ import {
   VolumeX, Download, Upload, Wifi, WifiOff, Moon, Sun, Smartphone,
   ShieldCheck, AlertCircle, Info, ExternalLink, Mail as MailIcon,
   MessageSquare as MessageSquareIcon, Shield as ShieldIcon,
-  CreditCard as CreditCardIcon
+  CreditCard as CreditCardIcon, Search, Video, FileCode
 } from 'lucide-react';
 import { supabase } from '../services/supabase';
 
@@ -134,15 +134,41 @@ type SecuritySettings = {
     avatar_url?: string;
     blockedAt: string;
   }>;
+  twoFactorAuth: boolean;
+  loginAlerts: boolean;
+};
+
+type AppearanceSettings = {
+  theme: 'light' | 'dark' | 'auto';
+  fontSize: 'small' | 'medium' | 'large';
+  reduceAnimations: boolean;
+  highContrast: boolean;
 };
 
 type SupportTicket = {
   id: string;
+  user_id: string;
   title: string;
+  description?: string;
   category: string;
-  status: 'open' | 'in_progress' | 'resolved';
+  status: 'open' | 'in_progress' | 'resolved' | 'closed';
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  attachments: string[];
+  admin_response?: string;
+  resolved_at?: string;
   created_at: string;
   updated_at: string;
+};
+
+type UserSettings = {
+  id?: string;
+  user_id: string;
+  notification_settings: NotificationSettings;
+  privacy_settings: PrivacySettings;
+  security_settings: SecuritySettings;
+  appearance_settings: AppearanceSettings;
+  created_at?: string;
+  updated_at?: string;
 };
 
 type ViewState =
@@ -172,9 +198,12 @@ const Profile = () => {
   const [uploading, setUploading] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [connectionCount, setConnectionCount] = useState(0);
+  const [userSettings, setUserSettings] = useState<UserSettings | null>(null);
+  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
+  const [savingSettings, setSavingSettings] = useState(false);
 
-  // Settings states
-  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({
+  // Default settings
+  const defaultNotificationSettings: NotificationSettings = {
     email: {
       messages: true,
       comments: true,
@@ -200,9 +229,9 @@ const Profile = () => {
       start: '22:00',
       end: '07:00',
     },
-  });
+  };
 
-  const [privacySettings, setPrivacySettings] = useState<PrivacySettings>({
+  const defaultPrivacySettings: PrivacySettings = {
     profileVisibility: 'public',
     showOnlineStatus: true,
     allowTagging: true,
@@ -215,40 +244,23 @@ const Profile = () => {
     },
     twoFactorAuth: false,
     loginAlerts: true,
-  });
+  };
 
-  const [securitySettings, setSecuritySettings] = useState<SecuritySettings>({
+  const defaultSecuritySettings: SecuritySettings = {
     passwordLastChanged: new Date().toISOString(),
     activeSessions: [],
     trustedDevices: [],
     blockedUsers: [],
-  });
+    twoFactorAuth: false,
+    loginAlerts: true,
+  };
 
-  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([
-    {
-      id: '1',
-      title: 'Account verification issue',
-      category: 'Account',
-      status: 'resolved',
-      created_at: '2024-01-10T10:30:00Z',
-      updated_at: '2024-01-12T14:20:00Z',
-    },
-    {
-      id: '2',
-      title: 'Business registration problem',
-      category: 'Business',
-      status: 'in_progress',
-      created_at: '2024-01-15T09:15:00Z',
-      updated_at: '2024-01-15T09:15:00Z',
-    },
-  ]);
-
-  const [appearance, setAppearance] = useState({
+  const defaultAppearanceSettings: AppearanceSettings = {
     theme: 'light',
     fontSize: 'medium',
     reduceAnimations: false,
     highContrast: false,
-  });
+  };
 
   const [editForm, setEditForm] = useState({
     first_name: '',
@@ -293,6 +305,31 @@ const Profile = () => {
           });
         }
 
+        // Get user settings
+        const { data: settingsData, error: settingsError } = await supabase
+          .from('user_settings')
+          .select('*')
+          .eq('user_id', user.id)
+          .single();
+
+        if (settingsError && settingsError.code !== 'PGRST116') { // PGRST116 = no rows returned
+          console.error('Error loading settings:', settingsError);
+        }
+
+        if (settingsData) {
+          setUserSettings(settingsData);
+        } else {
+          // Create default settings if none exist
+          const defaultSettings: UserSettings = {
+            user_id: user.id,
+            notification_settings: defaultNotificationSettings,
+            privacy_settings: defaultPrivacySettings,
+            security_settings: defaultSecuritySettings,
+            appearance_settings: defaultAppearanceSettings,
+          };
+          setUserSettings(defaultSettings);
+        }
+
         // Get posts from database
         const { data: postsData, error: postsError } = await supabase
           .from('posts')
@@ -324,20 +361,18 @@ const Profile = () => {
         setConnections(connectionsData || []);
         setConnectionCount(connectionsData?.length || 0);
 
-        // Load active sessions
-        const { data: sessions } = await supabase.auth.getSession();
-        if (sessions.session) {
-          setSecuritySettings(prev => ({
-            ...prev,
-            activeSessions: [{
-              id: sessions.session!.user.id,
-              device: 'Current Device',
-              location: 'Unknown',
-              lastActive: new Date().toISOString(),
-              current: true,
-            }]
-          }));
-        }
+        // Get support tickets
+        const { data: ticketsData, error: ticketsError } = await supabase
+          .from('support_tickets')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
+
+        if (ticketsError) console.error('Error loading tickets:', ticketsError);
+        setSupportTickets(ticketsData || []);
+
+        // Log activity
+        await logActivity('view_profile', user.id);
 
       } catch (error) {
         console.error('Error loading profile:', error);
@@ -355,6 +390,26 @@ const Profile = () => {
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const logActivity = async (action: string, userId: string, metadata?: any) => {
+    try {
+      // Get user IP and device info (simplified for now)
+      const userAgent = navigator.userAgent;
+      const deviceInfo = /Mobile/.test(userAgent) ? 'Mobile' : 'Desktop';
+      
+      await supabase
+        .from('activity_logs')
+        .insert({
+          user_id: userId,
+          action,
+          user_agent: userAgent,
+          device_info: deviceInfo,
+          metadata: metadata || {},
+        });
+    } catch (error) {
+      console.error('Error logging activity:', error);
+    }
   };
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -416,6 +471,9 @@ const Profile = () => {
         setProfile(prev => prev ? { ...prev, avatar_url: publicUrl } : null);
         setEditForm(prev => ({ ...prev, avatar_url: publicUrl }));
         showToast('Profile picture updated successfully');
+        
+        // Log activity
+        await logActivity('update_avatar', profile.id);
       }
 
     } catch (error) {
@@ -455,10 +513,133 @@ const Profile = () => {
       });
       setView('settings');
       showToast('Profile updated successfully');
+      
+      // Log activity
+      await logActivity('update_profile', profile.id);
     } catch (error) {
       console.error('Error updating profile:', error);
       showToast('Failed to update profile');
     }
+  };
+
+  /* ---------------- SETTINGS SAVING FUNCTIONS ---------------- */
+
+  const saveSettings = async (settingsType: string, data: any) => {
+    if (!profile || !userSettings) return;
+
+    setSavingSettings(true);
+    try {
+      // Update local state
+      const updatedSettings = {
+        ...userSettings,
+        [`${settingsType}_settings`]: data,
+        updated_at: new Date().toISOString(),
+      };
+      
+      setUserSettings(updatedSettings);
+
+      // Check if settings record exists
+      const { data: existingSettings } = await supabase
+        .from('user_settings')
+        .select('id')
+        .eq('user_id', profile.id)
+        .single();
+
+      let error;
+      if (existingSettings) {
+        // Update existing settings
+        const { error: updateError } = await supabase
+          .from('user_settings')
+          .update({ [`${settingsType}_settings`]: data })
+          .eq('user_id', profile.id);
+        error = updateError;
+      } else {
+        // Create new settings record
+        const { error: insertError } = await supabase
+          .from('user_settings')
+          .insert({
+            user_id: profile.id,
+            [`${settingsType}_settings`]: data,
+          });
+        error = insertError;
+      }
+
+      if (error) throw error;
+
+      showToast(`${settingsType.charAt(0).toUpperCase() + settingsType.slice(1)} settings saved`);
+      
+      // Log activity
+      await logActivity(`update_${settingsType}_settings`, profile.id, { settings: data });
+    } catch (error) {
+      console.error(`Error saving ${settingsType} settings:`, error);
+      showToast(`Failed to save ${settingsType} settings`);
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const handleSaveNotificationSettings = async () => {
+    if (!userSettings) return;
+    await saveSettings('notification', userSettings.notification_settings);
+  };
+
+  const handleSavePrivacySettings = async () => {
+    if (!userSettings) return;
+    await saveSettings('privacy', userSettings.privacy_settings);
+  };
+
+  const handleSaveSecuritySettings = async () => {
+    if (!userSettings) return;
+    await saveSettings('security', userSettings.security_settings);
+  };
+
+  const handleSaveAppearanceSettings = async () => {
+    if (!userSettings) return;
+    await saveSettings('appearance', userSettings.appearance_settings);
+  };
+
+  const updateNotificationSettings = (updates: Partial<NotificationSettings>) => {
+    if (!userSettings) return;
+    setUserSettings({
+      ...userSettings,
+      notification_settings: {
+        ...userSettings.notification_settings,
+        ...updates,
+      },
+    });
+  };
+
+  const updatePrivacySettings = (updates: Partial<PrivacySettings>) => {
+    if (!userSettings) return;
+    setUserSettings({
+      ...userSettings,
+      privacy_settings: {
+        ...userSettings.privacy_settings,
+        ...updates,
+      },
+    });
+  };
+
+  const updateSecuritySettings = (updates: Partial<SecuritySettings>) => {
+    if (!userSettings) return;
+    setUserSettings({
+      ...userSettings,
+      security_settings: {
+        ...userSettings.security_settings,
+        ...updates,
+      },
+    });
+  };
+
+  const updateAppearanceSettings = (updates: Partial<AppearanceSettings>) => {
+    if (!userSettings) return;
+    setUserSettings({
+      ...userSettings,
+      appearance_settings: {
+        ...userSettings.appearance_settings,
+        ...updates,
+      },
+    });
   };
 
   const handleDeletePost = async (postId: string) => {
@@ -474,6 +655,11 @@ const Profile = () => {
 
       setPosts(posts.filter(post => post.id !== postId));
       showToast('Post deleted');
+      
+      // Log activity
+      if (profile) {
+        await logActivity('delete_post', profile.id, { post_id: postId });
+      }
     } catch (error) {
       console.error('Error deleting post:', error);
       showToast('Failed to delete post');
@@ -493,13 +679,183 @@ const Profile = () => {
 
       setBusinesses(businesses.filter(business => business.id !== businessId));
       showToast('Business deleted');
+      
+      // Log activity
+      if (profile) {
+        await logActivity('delete_business', profile.id, { business_id: businessId });
+      }
     } catch (error) {
       console.error('Error deleting business:', error);
       showToast('Failed to delete business');
     }
   };
 
+  const handleChangePassword = async () => {
+    const newPassword = prompt('Enter new password:');
+    if (!newPassword) return;
+
+    if (newPassword.length < 6) {
+      showToast('Password must be at least 6 characters');
+      return;
+    }
+
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+
+      if (error) throw error;
+
+      // Update security settings
+      updateSecuritySettings({
+        passwordLastChanged: new Date().toISOString()
+      });
+      
+      // Save to database
+      if (userSettings) {
+        await saveSettings('security', {
+          ...userSettings.security_settings,
+          passwordLastChanged: new Date().toISOString()
+        });
+      }
+      
+      showToast('Password updated successfully');
+      
+      // Log activity
+      if (profile) {
+        await logActivity('change_password', profile.id);
+      }
+    } catch (error) {
+      console.error('Error changing password:', error);
+      showToast('Failed to change password');
+    }
+  };
+
+  const handleTerminateSession = (sessionId: string) => {
+    if (!window.confirm('Are you sure you want to terminate this session?')) return;
+    
+    updateSecuritySettings({
+      activeSessions: userSettings?.security_settings.activeSessions.filter(session => session.id !== sessionId) || []
+    });
+    showToast('Session terminated');
+    
+    // Log activity
+    if (profile) {
+      logActivity('terminate_session', profile.id, { session_id: sessionId });
+    }
+  };
+
+  const handleExportData = async () => {
+    try {
+      const exportData = {
+        profile,
+        posts,
+        businesses,
+        connections,
+        settings: userSettings,
+        supportTickets,
+        exportDate: new Date().toISOString(),
+      };
+
+      const dataStr = JSON.stringify(exportData, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(dataBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `bizconnect-export-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      showToast('Data exported successfully');
+      
+      // Log activity
+      if (profile) {
+        await logActivity('export_data', profile.id);
+      }
+    } catch (error) {
+      console.error('Error exporting data:', error);
+      showToast('Failed to export data');
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    const confirm1 = prompt('Type "DELETE" to confirm account deletion:');
+    if (confirm1 !== 'DELETE') {
+      showToast('Account deletion cancelled');
+      return;
+    }
+
+    const confirm2 = prompt('This action cannot be undone. Type your email to confirm:');
+    if (confirm2 !== profile?.email) {
+      showToast('Email does not match. Deletion cancelled.');
+      return;
+    }
+
+    if (!window.confirm('Are you absolutely sure? This will permanently delete all your data.')) {
+      showToast('Account deletion cancelled');
+      return;
+    }
+
+    try {
+      // First, delete all user data from related tables
+      await supabase.from('support_tickets').delete().eq('user_id', profile.id);
+      await supabase.from('user_settings').delete().eq('user_id', profile.id);
+      await supabase.from('activity_logs').delete().eq('user_id', profile.id);
+      await supabase.from('businesses').delete().eq('owner_id', profile.id);
+      await supabase.from('posts').delete().eq('author_id', profile.id);
+      await supabase.from('profiles').delete().eq('id', profile.id);
+      
+      await supabase.auth.signOut();
+      navigate('/login');
+      showToast('Account deleted successfully');
+    } catch (error) {
+      console.error('Error deleting account:', error);
+      showToast('Failed to delete account');
+    }
+  };
+
+  const handleCreateSupportTicket = async () => {
+    const title = prompt('Enter ticket title:');
+    if (!title) return;
+
+    const description = prompt('Enter description (optional):') || '';
+    const category = prompt('Enter category (Account, Business, Technical, Other):') || 'Other';
+    
+    if (!profile) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('support_tickets')
+        .insert({
+          user_id: profile.id,
+          title,
+          description,
+          category,
+          status: 'open',
+          priority: 'medium',
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setSupportTickets(prev => [data, ...prev]);
+      showToast('Support ticket created');
+      
+      // Log activity
+      await logActivity('create_support_ticket', profile.id, { ticket_id: data.id });
+    } catch (error) {
+      console.error('Error creating support ticket:', error);
+      showToast('Failed to create support ticket');
+    }
+  };
+
   const handleLogout = async () => {
+    if (profile) {
+      await logActivity('logout', profile.id);
+    }
     await supabase.auth.signOut();
     navigate('/login');
   };
@@ -550,160 +906,11 @@ const Profile = () => {
       .substring(0, 2);
   };
 
-  /* ---------------- SETTINGS HANDLERS ---------------- */
-
-  const handleSaveNotificationSettings = async () => {
-    try {
-      // Save to database or localStorage
-      localStorage.setItem('notificationSettings', JSON.stringify(notificationSettings));
-      showToast('Notification settings saved');
-    } catch (error) {
-      console.error('Error saving notification settings:', error);
-      showToast('Failed to save settings');
-    }
-  };
-
-  const handleSavePrivacySettings = async () => {
-    try {
-      localStorage.setItem('privacySettings', JSON.stringify(privacySettings));
-      showToast('Privacy settings saved');
-    } catch (error) {
-      console.error('Error saving privacy settings:', error);
-      showToast('Failed to save settings');
-    }
-  };
-
-  const handleSaveSecuritySettings = async () => {
-    try {
-      localStorage.setItem('securitySettings', JSON.stringify(securitySettings));
-      showToast('Security settings saved');
-    } catch (error) {
-      console.error('Error saving security settings:', error);
-      showToast('Failed to save settings');
-    }
-  };
-
-  const handleChangePassword = async () => {
-    const newPassword = prompt('Enter new password:');
-    if (!newPassword) return;
-
-    if (newPassword.length < 6) {
-      showToast('Password must be at least 6 characters');
-      return;
-    }
-
-    try {
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword
-      });
-
-      if (error) throw error;
-
-      setSecuritySettings(prev => ({
-        ...prev,
-        passwordLastChanged: new Date().toISOString()
-      }));
-      showToast('Password updated successfully');
-    } catch (error) {
-      console.error('Error changing password:', error);
-      showToast('Failed to change password');
-    }
-  };
-
-  const handleTerminateSession = (sessionId: string) => {
-    if (!window.confirm('Are you sure you want to terminate this session?')) return;
-    
-    setSecuritySettings(prev => ({
-      ...prev,
-      activeSessions: prev.activeSessions.filter(session => session.id !== sessionId)
-    }));
-    showToast('Session terminated');
-  };
-
-  const handleExportData = async () => {
-    try {
-      const exportData = {
-        profile,
-        posts,
-        businesses,
-        connections,
-        settings: {
-          notifications: notificationSettings,
-          privacy: privacySettings,
-          security: securitySettings,
-          appearance,
-        },
-        exportDate: new Date().toISOString(),
-      };
-
-      const dataStr = JSON.stringify(exportData, null, 2);
-      const dataBlob = new Blob([dataStr], { type: 'application/json' });
-      const url = URL.createObjectURL(dataBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `bizconnect-export-${new Date().toISOString().split('T')[0]}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
-      showToast('Data exported successfully');
-    } catch (error) {
-      console.error('Error exporting data:', error);
-      showToast('Failed to export data');
-    }
-  };
-
-  const handleDeleteAccount = async () => {
-    const confirm1 = prompt('Type "DELETE" to confirm account deletion:');
-    if (confirm1 !== 'DELETE') {
-      showToast('Account deletion cancelled');
-      return;
-    }
-
-    const confirm2 = prompt('This action cannot be undone. Type your email to confirm:');
-    if (confirm2 !== profile?.email) {
-      showToast('Email does not match. Deletion cancelled.');
-      return;
-    }
-
-    if (!window.confirm('Are you absolutely sure? This will permanently delete all your data.')) {
-      showToast('Account deletion cancelled');
-      return;
-    }
-
-    try {
-      const { error } = await supabase.rpc('delete_user_account');
-      
-      if (error) throw error;
-      
-      await supabase.auth.signOut();
-      navigate('/login');
-      showToast('Account deleted successfully');
-    } catch (error) {
-      console.error('Error deleting account:', error);
-      showToast('Failed to delete account');
-    }
-  };
-
-  const handleCreateSupportTicket = () => {
-    const title = prompt('Enter ticket title:');
-    if (!title) return;
-
-    const category = prompt('Enter category (Account, Business, Technical, Other):') || 'Other';
-    
-    const newTicket: SupportTicket = {
-      id: Date.now().toString(),
-      title,
-      category,
-      status: 'open',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    setSupportTickets(prev => [newTicket, ...prev]);
-    showToast('Support ticket created');
-  };
+  // Get current settings with fallbacks
+  const getNotificationSettings = () => userSettings?.notification_settings || defaultNotificationSettings;
+  const getPrivacySettings = () => userSettings?.privacy_settings || defaultPrivacySettings;
+  const getSecuritySettings = () => userSettings?.security_settings || defaultSecuritySettings;
+  const getAppearanceSettings = () => userSettings?.appearance_settings || defaultAppearanceSettings;
 
   if (loading) {
     return (
@@ -718,6 +925,8 @@ const Profile = () => {
 
   /* ---------------- NOTIFICATIONS VIEW ---------------- */
   if (view === 'notifications') {
+    const notificationSettings = getNotificationSettings();
+    
     return (
       <div className="min-h-screen bg-gradient-to-b from-gray-50 to-blue-50">
         <div className="sticky top-0 z-40 bg-gradient-to-b from-gray-50 to-blue-50">
@@ -732,6 +941,11 @@ const Profile = () => {
               <h1 className="text-lg font-bold text-gray-800">Notifications</h1>
               <p className="text-xs text-gray-500">Manage your notification preferences</p>
             </div>
+            {savingSettings && (
+              <div className="ml-auto text-xs text-blue-600 font-medium">
+                Saving...
+              </div>
+            )}
           </div>
         </div>
 
@@ -758,10 +972,12 @@ const Profile = () => {
                       </p>
                     </div>
                     <button
-                      onClick={() => setNotificationSettings(prev => ({
-                        ...prev,
-                        email: { ...prev.email, [key]: !value }
-                      }))}
+                      onClick={() => updateNotificationSettings({
+                        email: {
+                          ...notificationSettings.email,
+                          [key]: !value
+                        }
+                      })}
                       className={`w-12 h-6 rounded-full transition-colors ${value ? 'bg-blue-600' : 'bg-gray-300'}`}
                     >
                       <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${value ? 'translate-x-7' : 'translate-x-1'}`} />
@@ -792,10 +1008,12 @@ const Profile = () => {
                       </p>
                     </div>
                     <button
-                      onClick={() => setNotificationSettings(prev => ({
-                        ...prev,
-                        push: { ...prev.push, [key]: !value }
-                      }))}
+                      onClick={() => updateNotificationSettings({
+                        push: {
+                          ...notificationSettings.push,
+                          [key]: !value
+                        }
+                      })}
                       className={`w-12 h-6 rounded-full transition-colors ${value ? 'bg-green-600' : 'bg-gray-300'}`}
                     >
                       <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${value ? 'translate-x-7' : 'translate-x-1'}`} />
@@ -812,7 +1030,7 @@ const Profile = () => {
                 {['realtime', 'daily', 'weekly'].map((freq) => (
                   <button
                     key={freq}
-                    onClick={() => setNotificationSettings(prev => ({ ...prev, frequency: freq as any }))}
+                    onClick={() => updateNotificationSettings({ frequency: freq as any })}
                     className={`w-full p-3 rounded-lg border transition-all ${notificationSettings.frequency === freq ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
                   >
                     <div className="flex items-center justify-between">
@@ -834,10 +1052,12 @@ const Profile = () => {
                   <p className="text-xs text-gray-500">Pause notifications during specific hours</p>
                 </div>
                 <button
-                  onClick={() => setNotificationSettings(prev => ({
-                    ...prev,
-                    quietHours: { ...prev.quietHours, enabled: !prev.quietHours.enabled }
-                  }))}
+                  onClick={() => updateNotificationSettings({
+                    quietHours: {
+                      ...notificationSettings.quietHours,
+                      enabled: !notificationSettings.quietHours.enabled
+                    }
+                  })}
                   className={`w-12 h-6 rounded-full transition-colors ${notificationSettings.quietHours.enabled ? 'bg-blue-600' : 'bg-gray-300'}`}
                 >
                   <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${notificationSettings.quietHours.enabled ? 'translate-x-7' : 'translate-x-1'}`} />
@@ -852,10 +1072,12 @@ const Profile = () => {
                       <input
                         type="time"
                         value={notificationSettings.quietHours.start}
-                        onChange={(e) => setNotificationSettings(prev => ({
-                          ...prev,
-                          quietHours: { ...prev.quietHours, start: e.target.value }
-                        }))}
+                        onChange={(e) => updateNotificationSettings({
+                          quietHours: {
+                            ...notificationSettings.quietHours,
+                            start: e.target.value
+                          }
+                        })}
                         className="w-full mt-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm"
                       />
                     </div>
@@ -864,10 +1086,12 @@ const Profile = () => {
                       <input
                         type="time"
                         value={notificationSettings.quietHours.end}
-                        onChange={(e) => setNotificationSettings(prev => ({
-                          ...prev,
-                          quietHours: { ...prev.quietHours, end: e.target.value }
-                        }))}
+                        onChange={(e) => updateNotificationSettings({
+                          quietHours: {
+                            ...notificationSettings.quietHours,
+                            end: e.target.value
+                          }
+                        })}
                         className="w-full mt-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm"
                       />
                     </div>
@@ -878,9 +1102,10 @@ const Profile = () => {
 
             <button
               onClick={handleSaveNotificationSettings}
-              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200/50 active:scale-[0.98] transition-all duration-200"
+              disabled={savingSettings}
+              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200/50 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Save Changes
+              {savingSettings ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
         </main>
@@ -890,6 +1115,8 @@ const Profile = () => {
 
   /* ---------------- PRIVACY VIEW ---------------- */
   if (view === 'privacy') {
+    const privacySettings = getPrivacySettings();
+    
     return (
       <div className="min-h-screen bg-gradient-to-b from-gray-50 to-blue-50">
         <div className="sticky top-0 z-40 bg-gradient-to-b from-gray-50 to-blue-50">
@@ -904,6 +1131,11 @@ const Profile = () => {
               <h1 className="text-lg font-bold text-gray-800">Privacy</h1>
               <p className="text-xs text-gray-500">Control your privacy settings</p>
             </div>
+            {savingSettings && (
+              <div className="ml-auto text-xs text-blue-600 font-medium">
+                Saving...
+              </div>
+            )}
           </div>
         </div>
 
@@ -920,7 +1152,7 @@ const Profile = () => {
                 ].map((option) => (
                   <button
                     key={option.value}
-                    onClick={() => setPrivacySettings(prev => ({ ...prev, profileVisibility: option.value as any }))}
+                    onClick={() => updatePrivacySettings({ profileVisibility: option.value as any })}
                     className={`w-full p-4 rounded-lg border transition-all text-left ${privacySettings.profileVisibility === option.value ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
                   >
                     <div className="flex items-center justify-between mb-1">
@@ -953,7 +1185,7 @@ const Profile = () => {
                       </div>
                     </div>
                     <button
-                      onClick={() => setPrivacySettings(prev => ({ ...prev, [key]: !prev[key as keyof typeof prev] as any }))}
+                      onClick={() => updatePrivacySettings({ [key]: !privacySettings[key as keyof typeof privacySettings] as any })}
                       className={`w-12 h-6 rounded-full transition-colors ${privacySettings[key as keyof typeof privacySettings] ? 'bg-blue-600' : 'bg-gray-300'}`}
                     >
                       <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${privacySettings[key as keyof typeof privacySettings] ? 'translate-x-7' : 'translate-x-1'}`} />
@@ -989,10 +1221,12 @@ const Profile = () => {
                       </p>
                     </div>
                     <button
-                      onClick={() => setPrivacySettings(prev => ({
-                        ...prev,
-                        dataSharing: { ...prev.dataSharing, [key]: !value }
-                      }))}
+                      onClick={() => updatePrivacySettings({
+                        dataSharing: {
+                          ...privacySettings.dataSharing,
+                          [key]: !value
+                        }
+                      })}
                       className={`w-12 h-6 rounded-full transition-colors ${value ? 'bg-purple-600' : 'bg-gray-300'}`}
                     >
                       <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${value ? 'translate-x-7' : 'translate-x-1'}`} />
@@ -1012,10 +1246,13 @@ const Profile = () => {
                     <p className="text-xs text-gray-500">Add an extra layer of security</p>
                   </div>
                   <button
-                    onClick={() => setPrivacySettings(prev => ({ ...prev, twoFactorAuth: !prev.twoFactorAuth }))}
-                    className="px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white text-sm font-medium rounded-lg hover:from-blue-700 hover:to-blue-800 transition-colors"
+                    onClick={() => {
+                      updatePrivacySettings({ twoFactorAuth: !privacySettings.twoFactorAuth });
+                      updateSecuritySettings({ twoFactorAuth: !privacySettings.twoFactorAuth });
+                    }}
+                    className={`w-12 h-6 rounded-full transition-colors ${privacySettings.twoFactorAuth ? 'bg-blue-600' : 'bg-gray-300'}`}
                   >
-                    {privacySettings.twoFactorAuth ? 'Disable' : 'Enable'}
+                    <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${privacySettings.twoFactorAuth ? 'translate-x-7' : 'translate-x-1'}`} />
                   </button>
                 </div>
 
@@ -1025,7 +1262,10 @@ const Profile = () => {
                     <p className="text-xs text-gray-500">Get notified of new logins</p>
                   </div>
                   <button
-                    onClick={() => setPrivacySettings(prev => ({ ...prev, loginAlerts: !prev.loginAlerts }))}
+                    onClick={() => {
+                      updatePrivacySettings({ loginAlerts: !privacySettings.loginAlerts });
+                      updateSecuritySettings({ loginAlerts: !privacySettings.loginAlerts });
+                    }}
                     className={`w-12 h-6 rounded-full transition-colors ${privacySettings.loginAlerts ? 'bg-blue-600' : 'bg-gray-300'}`}
                   >
                     <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${privacySettings.loginAlerts ? 'translate-x-7' : 'translate-x-1'}`} />
@@ -1036,9 +1276,10 @@ const Profile = () => {
 
             <button
               onClick={handleSavePrivacySettings}
-              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200/50 active:scale-[0.98] transition-all duration-200"
+              disabled={savingSettings}
+              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200/50 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Save Privacy Settings
+              {savingSettings ? 'Saving...' : 'Save Privacy Settings'}
             </button>
           </div>
         </main>
@@ -1048,6 +1289,8 @@ const Profile = () => {
 
   /* ---------------- SECURITY VIEW ---------------- */
   if (view === 'security') {
+    const securitySettings = getSecuritySettings();
+    
     return (
       <div className="min-h-screen bg-gradient-to-b from-gray-50 to-blue-50">
         <div className="sticky top-0 z-40 bg-gradient-to-b from-gray-50 to-blue-50">
@@ -1062,6 +1305,11 @@ const Profile = () => {
               <h1 className="text-lg font-bold text-gray-800">Security</h1>
               <p className="text-xs text-gray-500">Manage your account security</p>
             </div>
+            {savingSettings && (
+              <div className="ml-auto text-xs text-blue-600 font-medium">
+                Saving...
+              </div>
+            )}
           </div>
         </div>
 
@@ -1075,7 +1323,12 @@ const Profile = () => {
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-gray-900">Password</h3>
-                  <p className="text-xs text-gray-500">Last changed {formatRelativeTime(securitySettings.passwordLastChanged)}</p>
+                  <p className="text-xs text-gray-500">
+                    {securitySettings.passwordLastChanged 
+                      ? `Last changed ${formatRelativeTime(securitySettings.passwordLastChanged)}`
+                      : 'Never changed'
+                    }
+                  </p>
                 </div>
               </div>
 
@@ -1134,14 +1387,17 @@ const Profile = () => {
                   </div>
                 </div>
                 <button
-                  onClick={() => setPrivacySettings(prev => ({ ...prev, twoFactorAuth: !prev.twoFactorAuth }))}
-                  className={`w-12 h-6 rounded-full transition-colors ${privacySettings.twoFactorAuth ? 'bg-green-600' : 'bg-gray-300'}`}
+                  onClick={() => {
+                    const newValue = !securitySettings.twoFactorAuth;
+                    updateSecuritySettings({ twoFactorAuth: newValue });
+                  }}
+                  className={`w-12 h-6 rounded-full transition-colors ${securitySettings.twoFactorAuth ? 'bg-green-600' : 'bg-gray-300'}`}
                 >
-                  <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${privacySettings.twoFactorAuth ? 'translate-x-7' : 'translate-x-1'}`} />
+                  <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${securitySettings.twoFactorAuth ? 'translate-x-7' : 'translate-x-1'}`} />
                 </button>
               </div>
 
-              {privacySettings.twoFactorAuth && (
+              {securitySettings.twoFactorAuth && (
                 <div className="mt-4 p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg border border-green-200">
                   <p className="text-sm text-green-800 font-medium mb-2">✓ Two-Factor Authentication is enabled</p>
                   <p className="text-xs text-green-700">
@@ -1182,9 +1438,10 @@ const Profile = () => {
 
             <button
               onClick={handleSaveSecuritySettings}
-              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200/50 active:scale-[0.98] transition-all duration-200"
+              disabled={savingSettings}
+              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200/50 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Save Security Settings
+              {savingSettings ? 'Saving...' : 'Save Security Settings'}
             </button>
           </div>
         </main>
@@ -1413,8 +1670,12 @@ const Profile = () => {
 
                 <button
                   onClick={() => {
-                    // Clear browsing data
                     if (window.confirm('This will clear all browsing data including login sessions. Continue?')) {
+                      // Clear session storage and cookies
+                      sessionStorage.clear();
+                      document.cookie.split(";").forEach(function(c) {
+                        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+                      });
                       showToast('Browsing data cleared');
                     }
                   }}
@@ -1451,6 +1712,181 @@ const Profile = () => {
                 Delete Account
               </button>
             </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  /* ---------------- APPEARANCE VIEW ---------------- */
+  if (view === 'appearance') {
+    const appearanceSettings = getAppearanceSettings();
+    
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-gray-50 to-blue-50">
+        <div className="sticky top-0 z-40 bg-gradient-to-b from-gray-50 to-blue-50">
+          <div className="px-4 pt-4 pb-3 flex items-center gap-3 border-b border-gray-200/80">
+            <button 
+              onClick={() => setView('settings')}
+              className="p-2 bg-white border border-gray-200 rounded-xl text-gray-600 hover:bg-gray-50 active:scale-95 transition-all shadow-sm"
+            >
+              <ArrowLeft size={20} />
+            </button>
+            <div>
+              <h1 className="text-lg font-bold text-gray-800">Appearance</h1>
+              <p className="text-xs text-gray-500">Customize the app appearance</p>
+            </div>
+            {savingSettings && (
+              <div className="ml-auto text-xs text-blue-600 font-medium">
+                Saving...
+              </div>
+            )}
+          </div>
+        </div>
+
+        <main className="px-4 pt-4 pb-24 max-w-screen-sm mx-auto">
+          <div className="space-y-6">
+            {/* Theme */}
+            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-6">
+              <h3 className="text-sm font-bold text-gray-900 mb-4">Theme</h3>
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { value: 'light', label: 'Light', icon: <Sun size={20} /> },
+                  { value: 'dark', label: 'Dark', icon: <Moon size={20} /> },
+                  { value: 'auto', label: 'Auto', icon: <Smartphone size={20} /> },
+                ].map((theme) => (
+                  <button
+                    key={theme.value}
+                    onClick={() => updateAppearanceSettings({ theme: theme.value as any })}
+                    className={`p-4 rounded-xl border transition-all flex flex-col items-center gap-2 ${
+                      appearanceSettings.theme === theme.value 
+                        ? 'border-blue-500 bg-blue-50' 
+                        : 'border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className={`p-2 rounded-lg ${
+                      appearanceSettings.theme === theme.value 
+                        ? 'bg-blue-100 text-blue-600' 
+                        : 'bg-gray-100 text-gray-600'
+                    }`}>
+                      {theme.icon}
+                    </div>
+                    <span className="text-sm font-medium text-gray-900">{theme.label}</span>
+                    {appearanceSettings.theme === theme.value && (
+                      <Check size={16} className="text-blue-600" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Font Size */}
+            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-6">
+              <h3 className="text-sm font-bold text-gray-900 mb-4">Font Size</h3>
+              <div className="space-y-3">
+                {[
+                  { value: 'small', label: 'Small', desc: 'Compact text' },
+                  { value: 'medium', label: 'Medium', desc: 'Default size' },
+                  { value: 'large', label: 'Large', desc: 'Easy reading' },
+                ].map((size) => (
+                  <button
+                    key={size.value}
+                    onClick={() => updateAppearanceSettings({ fontSize: size.value as any })}
+                    className={`w-full p-4 rounded-lg border transition-all text-left ${
+                      appearanceSettings.fontSize === size.value 
+                        ? 'border-blue-500 bg-blue-50' 
+                        : 'border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-bold text-gray-900">{size.label}</span>
+                      {appearanceSettings.fontSize === size.value && (
+                        <Check size={16} className="text-blue-600" />
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500">{size.desc}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Accessibility */}
+            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-6">
+              <h3 className="text-sm font-bold text-gray-900 mb-4">Accessibility</h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">Reduce Animations</p>
+                    <p className="text-xs text-gray-500">Minimize motion and animations</p>
+                  </div>
+                  <button
+                    onClick={() => updateAppearanceSettings({ reduceAnimations: !appearanceSettings.reduceAnimations })}
+                    className={`w-12 h-6 rounded-full transition-colors ${
+                      appearanceSettings.reduceAnimations ? 'bg-blue-600' : 'bg-gray-300'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${
+                      appearanceSettings.reduceAnimations ? 'translate-x-7' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">High Contrast</p>
+                    <p className="text-xs text-gray-500">Increase color contrast for better visibility</p>
+                  </div>
+                  <button
+                    onClick={() => updateAppearanceSettings({ highContrast: !appearanceSettings.highContrast })}
+                    className={`w-12 h-6 rounded-full transition-colors ${
+                      appearanceSettings.highContrast ? 'bg-blue-600' : 'bg-gray-300'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 rounded-full bg-white transform transition-transform ${
+                      appearanceSettings.highContrast ? 'translate-x-7' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Preview */}
+            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 p-6">
+              <h3 className="text-sm font-bold text-gray-900 mb-4">Preview</h3>
+              <div className={`p-4 rounded-lg border border-gray-200 ${
+                appearanceSettings.theme === 'dark' ? 'bg-gray-900 text-white' : 'bg-white'
+              }`}>
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-blue-600 rounded-full"></div>
+                  <div>
+                    <p className={`font-medium ${
+                      appearanceSettings.fontSize === 'small' ? 'text-sm' :
+                      appearanceSettings.fontSize === 'large' ? 'text-lg' : 'text-base'
+                    }`}>John Doe</p>
+                    <p className="text-xs opacity-75">Just posted an update</p>
+                  </div>
+                </div>
+                <p className={`mb-2 ${
+                  appearanceSettings.fontSize === 'small' ? 'text-sm' :
+                  appearanceSettings.fontSize === 'large' ? 'text-lg' : 'text-base'
+                }`}>
+                  This is how text will appear with your current settings.
+                </p>
+                <div className="flex gap-2">
+                  <button className="px-3 py-1 bg-blue-100 text-blue-700 text-xs rounded-full">Like</button>
+                  <button className="px-3 py-1 bg-gray-100 text-gray-700 text-xs rounded-full">Comment</button>
+                  <button className="px-3 py-1 bg-gray-100 text-gray-700 text-xs rounded-full">Share</button>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={handleSaveAppearanceSettings}
+              disabled={savingSettings}
+              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200/50 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {savingSettings ? 'Saving...' : 'Save Appearance Settings'}
+            </button>
           </div>
         </main>
       </div>
@@ -1737,7 +2173,7 @@ const Profile = () => {
 
               <button 
                 onClick={() => setView('security')}
-                className="w-full p-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                className="w-full p-4 flex items-center justify-between hover:bg-gray-50 transition-colors border-b border-gray-100"
               >
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-gradient-to-r from-yellow-500 to-yellow-600 rounded-lg flex items-center justify-center">
@@ -1746,6 +2182,22 @@ const Profile = () => {
                   <div className="text-left">
                     <p className="text-sm font-medium text-gray-900">Security</p>
                     <p className="text-xs text-gray-500">Password and account security</p>
+                  </div>
+                </div>
+                <ChevronRight size={18} className="text-gray-400" />
+              </button>
+
+              <button 
+                onClick={() => setView('appearance')}
+                className="w-full p-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-lg flex items-center justify-center">
+                    <Smartphone size={18} className="text-white" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-medium text-gray-900">Appearance</p>
+                    <p className="text-xs text-gray-500">Customize theme and display</p>
                   </div>
                 </div>
                 <ChevronRight size={18} className="text-gray-400" />

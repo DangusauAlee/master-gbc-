@@ -19,7 +19,7 @@ import {
   MapPin
 } from 'lucide-react';
 import { Conversation, Member } from '../types';
-import { getConversations, getMembers } from '../services/mockApi';
+import { supabase } from '../services/supabase';
 
 const Messages = () => {
     const navigate = useNavigate();
@@ -32,26 +32,172 @@ const Messages = () => {
     const [loading, setLoading] = useState(true);
     const [activeFilter, setActiveFilter] = useState<'all' | 'unread'>('all');
     const [selectedFriend, setSelectedFriend] = useState<Member | null>(null);
+    const [currentUser, setCurrentUser] = useState<any>(null);
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                setLoading(true);
-                const [convsData, membersData] = await Promise.all([
-                    getConversations(),
-                    getMembers()
-                ]);
-                setConversations(convsData);
-                setFilteredConversations(convsData);
-                setFriends(membersData.filter(m => m.is_friend));
-            } catch (error) {
-                console.error('Error fetching data:', error);
-            } finally {
-                setLoading(false);
-            }
+        // Get current user
+        const getUser = async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            setCurrentUser(user);
         };
-        fetchData();
+        getUser();
     }, []);
+
+    useEffect(() => {
+        if (currentUser) {
+            fetchData();
+        }
+    }, [currentUser]);
+
+    const fetchData = async () => {
+        try {
+            setLoading(true);
+            
+            if (!currentUser) return;
+            
+            // Fetch conversations where current user is participant_1 or participant_2
+            const { data: conversationsData, error: convError } = await supabase
+                .from('conversations')
+                .select(`
+                    *,
+                    participant_1_profile:profiles!conversations_participant_1_fkey (
+                        id,
+                        first_name,
+                        last_name,
+                        avatar_url
+                    ),
+                    participant_2_profile:profiles!conversations_participant_2_fkey (
+                        id,
+                        first_name,
+                        last_name,
+                        avatar_url
+                    )
+                `)
+                .or(`participant_1.eq.${currentUser.id},participant_2.eq.${currentUser.id}`)
+                .order('last_message_at', { ascending: false });
+            
+            if (convError) throw convError;
+            
+            // Get conversation IDs to fetch messages
+            const conversationIds = conversationsData?.map(c => c.id) || [];
+            
+            // Fetch the latest message for each conversation
+            let conversationsWithDetails: Conversation[] = [];
+            
+            for (const conv of conversationsData || []) {
+                // Determine the other participant
+                const otherParticipant = conv.participant_1 === currentUser.id 
+                    ? conv.participant_2_profile 
+                    : conv.participant_1_profile;
+                
+                // Get the last message for this conversation
+                const { data: lastMessage, error: msgError } = await supabase
+                    .from('messages')
+                    .select('*')
+                    .eq('conversation_id', conv.id)
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single();
+                
+                if (msgError && msgError.code !== 'PGRST116') { // Not found
+                    console.error('Error fetching last message:', msgError);
+                }
+                
+                // Get unread count (messages not read by current user)
+                const { data: unreadMessages, error: unreadError } = await supabase
+                    .from('messages')
+                    .select('id')
+                    .eq('conversation_id', conv.id)
+                    .eq('is_read', false)
+                    .neq('sender_id', currentUser.id);
+                
+                if (unreadError) {
+                    console.error('Error fetching unread messages:', unreadError);
+                }
+                
+                conversationsWithDetails.push({
+                    id: conv.id,
+                    with_user: {
+                        id: otherParticipant?.id || '',
+                        name: otherParticipant 
+                            ? `${otherParticipant.first_name || ''} ${otherParticipant.last_name || ''}`.trim()
+                            : 'Unknown User',
+                        avatar_url: otherParticipant?.avatar_url,
+                        status: 'online' // You might want to track this differently
+                    },
+                    last_message: lastMessage?.content || 'No messages yet',
+                    last_message_at: formatTimeAgo(lastMessage?.created_at || conv.created_at),
+                    unread_count: unreadMessages?.length || 0
+                });
+            }
+            
+            setConversations(conversationsWithDetails);
+            setFilteredConversations(conversationsWithDetails);
+            
+            // Fetch friends (connections where status is 'accepted')
+            const { data: connectionsData, error: connError } = await supabase
+                .from('connections')
+                .select(`
+                    *,
+                    friend_profile:profiles!connections_friend_id_fkey (
+                        id,
+                        first_name,
+                        last_name,
+                        avatar_url
+                    ),
+                    user_profile:profiles!connections_user_id_fkey (
+                        id,
+                        first_name,
+                        last_name,
+                        avatar_url
+                    )
+                `)
+                .or(`user_id.eq.${currentUser.id},friend_id.eq.${currentUser.id}`)
+                .eq('status', 'accepted');
+            
+            if (connError) throw connError;
+            
+            // Transform connections to friends list
+            const friendsList: Member[] = [];
+            
+            for (const conn of connectionsData || []) {
+                // Determine which user is the friend (not current user)
+                let friendProfile = null;
+                
+                if (conn.user_id === currentUser.id) {
+                    friendProfile = conn.friend_profile;
+                } else if (conn.friend_id === currentUser.id) {
+                    friendProfile = conn.user_profile;
+                }
+                
+                if (friendProfile) {
+                    // Fetch member details for position and company
+                    const { data: memberData } = await supabase
+                        .from('members')
+                        .select('position, company')
+                        .eq('user_id', friendProfile.id)
+                        .single();
+                    
+                    friendsList.push({
+                        id: friendProfile.id,
+                        user_id: friendProfile.id,
+                        full_name: `${friendProfile.first_name || ''} ${friendProfile.last_name || ''}`.trim(),
+                        image_url: friendProfile.avatar_url,
+                        position: memberData?.position || '',
+                        company: memberData?.company || '',
+                        is_friend: true
+                    });
+                }
+            }
+            
+            setFriends(friendsList);
+            
+        } catch (error) {
+            console.error('Error fetching data:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => {
         let result = conversations;
@@ -73,9 +219,54 @@ const Messages = () => {
         setFilteredConversations(result);
     }, [searchTerm, activeFilter, conversations]);
 
-    const openChat = (userId: number) => {
-        navigate(`/messages/chat/${userId}`);
-        setIsNewChatOpen(false);
+    const formatTimeAgo = (timestamp: string) => {
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+        
+        if (diffInSeconds < 60) return 'Just now';
+        if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+        if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+        if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+
+    const openChat = async (userId: string) => {
+        try {
+            if (!currentUser) return;
+            
+            // Check if conversation already exists
+            const { data: existingConversation } = await supabase
+                .from('conversations')
+                .select('*')
+                .or(`and(participant_1.eq.${currentUser.id},participant_2.eq.${userId}),and(participant_1.eq.${userId},participant_2.eq.${currentUser.id})`)
+                .single();
+            
+            let conversationId = existingConversation?.id;
+            
+            // If no conversation exists, create one
+            if (!existingConversation) {
+                const { data: newConversation, error } = await supabase
+                    .from('conversations')
+                    .insert([
+                        {
+                            participant_1: currentUser.id,
+                            participant_2: userId,
+                            last_message_at: new Date().toISOString()
+                        }
+                    ])
+                    .select()
+                    .single();
+                
+                if (error) throw error;
+                conversationId = newConversation.id;
+            }
+            
+            navigate(`/messages/chat/${conversationId}`);
+            setIsNewChatOpen(false);
+        } catch (error) {
+            console.error('Error opening chat:', error);
+        }
     };
 
     const filteredFriends = friends.filter(f => 
@@ -222,7 +413,7 @@ const Messages = () => {
                             {filteredConversations.map(conv => (
                                 <div 
                                     key={conv.id} 
-                                    onClick={() => openChat(conv.with_user.id)}
+                                    onClick={() => navigate(`/messages/chat/${conv.id}`)}
                                     className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-gray-200/80 overflow-hidden hover:shadow-xl transition-shadow cursor-pointer active:scale-[0.99]"
                                 >
                                     <div className="p-4">
